@@ -6,7 +6,7 @@
 
     var PLUGIN_MANIFEST = {
         type: 'video',
-        version: '2.5.0',
+        version: '2.6.0',
         name: 'Shikimori',
         description: 'Каталог аниме Shikimori (GraphQL + REST v1) для Lampa',
         component: 'shikimori_main'
@@ -69,18 +69,12 @@
 
     function escapeHtml(str) {
         if (str === null || str === undefined) return '';
-        return String(str)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
     }
 
     function cleanShikimoriText(text) {
         if (!text) return '';
-        return String(text)
-            .replace(/\[spoiler(?:=[^\]]*)?\]([\s\S]*?)\[\/spoiler\]/gi, ' [Спойлер: $1] ')
-            .replace(/\[(?:character|person|anime|manga|ranobe|club|user|url|image)[^\]]*\]([\s\S]*?)\[\/(?:character|person|anime|manga|ranobe|club|user|url|image)\]/gi, '$1')
-            .replace(/\[\/?[a-z0-9_=-]+(?:\s+[^\]]*)?\]/gi, '')
-            .replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+        return String(text).replace(/\[spoiler(?:=[^\]]*)?\]([\s\S]*?)\[\/spoiler\]/gi, ' [Спойлер: $1] ').replace(/\[(?:character|person|anime|manga|ranobe|club|user|url|image)[^\]]*\]([\s\S]*?)\[\/(?:character|person|anime|manga|ranobe|club|user|url|image)\]/gi, '$1').replace(/\[\/?[a-z0-9_=-]+(?:\s+[^\]]*)?\]/gi, '').replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
     }
 
     function getBaseDomain() {
@@ -98,9 +92,7 @@
         if (!url) return '';
         var str = String(url).trim();
         if (str.indexOf('missing_') !== -1) return '';
-        if (str.indexOf('http://') === 0 || str.indexOf('https://') === 0) {
-            return str.replace(/^https?:\/\/shikimori\.(one|org|me)\//i, base + '/');
-        }
+        if (str.indexOf('http://') === 0 || str.indexOf('https://') === 0) return str.replace(/^https?:\/\/shikimori\.(one|org|me)\//i, base + '/');
         if (str.indexOf('//') === 0) return 'https:' + str;
         return str.indexOf('/') === 0 ? base + str : base + '/' + str;
     }
@@ -113,18 +105,14 @@
     }
 
     function setCache(key, value, ttlMinutes) {
-        memoryCache[key] = {
-            value: value,
-            expires: Date.now() + (ttlMinutes || CONFIG.cacheLifeMinutes) * 60000
-        };
+        memoryCache[key] = { value: value, expires: Date.now() + (ttlMinutes || CONFIG.cacheLifeMinutes) * 60000 };
     }
 
     function scheduleTask(fn) {
         var now = Date.now();
         var wait = Math.max(0, CONFIG.minIntervalMs - (now - lastRequestTime));
         lastRequestTime = now + wait;
-        if (wait === 0) fn();
-        else setTimeout(fn, wait);
+        if (wait === 0) fn(); else setTimeout(fn, wait);
     }
 
     function httpRequest(options, onSuccess, onError) {
@@ -143,27 +131,20 @@
             if (!options.noCache) setCache(cacheKey, data, options.ttlMinutes);
             var list = inflightRequests[cacheKey] || [];
             delete inflightRequests[cacheKey];
-            for (var i = 0; i < list.length; i++) {
-                try { list[i].onSuccess(data); } catch (e) {}
-            }
+            for (var i = 0; i < list.length; i++) { try { list[i].onSuccess(data); } catch (e) {} }
         }
 
         function finishError(err) {
             var list = inflightRequests[cacheKey] || [];
             delete inflightRequests[cacheKey];
-            for (var i = 0; i < list.length; i++) {
-                try { if (list[i].onError) list[i].onError(err); } catch (e) {}
-            }
+            for (var i = 0; i < list.length; i++) { try { if (list[i].onError) list[i].onError(err); } catch (e) {} }
         }
 
         scheduleTask(function () {
             var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             var timer = setTimeout(function () { if (controller) controller.abort(); }, options.timeout || CONFIG.timeout);
             var fetchOpts = { method: options.method || 'GET', headers: { 'Accept': 'application/json' } };
-            if (options.body) {
-                fetchOpts.headers['Content-Type'] = 'application/json';
-                fetchOpts.body = options.body;
-            }
+            if (options.body) { fetchOpts.headers['Content-Type'] = 'application/json'; fetchOpts.body = options.body; }
             if (controller) fetchOpts.signal = controller.signal;
 
             if (typeof fetch === 'function') {
@@ -182,13 +163,7 @@
                         clearTimeout(timer);
                         if (!options.retriedFallback && options.url.indexOf(CONFIG.primaryDomain) === 0) {
                             delete inflightRequests[cacheKey];
-                            httpRequest({
-                                url: options.url.replace(CONFIG.primaryDomain, CONFIG.fallbackDomain),
-                                method: options.method,
-                                body: options.body,
-                                cacheKey: cacheKey,
-                                retriedFallback: true
-                            }, finishSuccess, finishError);
+                            httpRequest({ url: options.url.replace(CONFIG.primaryDomain, CONFIG.fallbackDomain), method: options.method, body: options.body, cacheKey: cacheKey, retriedFallback: true }, finishSuccess, finishError);
                             return;
                         }
                         finishError(err || new Error('Ошибка сети при обращении к Shikimori'));
@@ -196,17 +171,8 @@
             } else if (window.Lampa && Lampa.Reguest) {
                 var net = new Lampa.Reguest();
                 net.timeout(options.timeout || CONFIG.timeout);
-                net.silent(options.url, function (json) {
-                    clearTimeout(timer);
-                    finishSuccess(json);
-                }, function (a, c) {
-                    clearTimeout(timer);
-                    finishError(new Error(net.errorDecode ? net.errorDecode(a, c) : 'Ошибка сети Lampa.Reguest'));
-                }, options.body ? JSON.parse(options.body) : false);
-            } else {
-                clearTimeout(timer);
-                finishError(new Error('Отсутствует сетевой транспорт'));
-            }
+                net.silent(options.url, function (json) { clearTimeout(timer); finishSuccess(json); }, function (a, c) { clearTimeout(timer); finishError(new Error(net.errorDecode ? net.errorDecode(a, c) : 'Ошибка сети Lampa.Reguest')); }, options.body ? JSON.parse(options.body) : false);
+            } else { clearTimeout(timer); finishError(new Error('Отсутствует сетевой транспорт')); }
         });
     }
 
@@ -222,13 +188,11 @@
         var status = raw.status || 'released';
         var rating = raw.rating || 'none';
         var scoreNum = parseFloat(raw.score) || 0;
-
         var airedDate = (raw.airedOn && raw.airedOn.date) ? raw.airedOn.date : (raw.aired_on ? String(raw.aired_on) : '');
         var airedYear = (raw.airedOn && raw.airedOn.year) ? String(raw.airedOn.year) : (airedDate ? airedDate.slice(0, 4) : '');
         var releasedDate = (raw.releasedOn && raw.releasedOn.date) ? raw.releasedOn.date : (raw.released_on ? String(raw.released_on) : '');
 
-        var posterMain = '';
-        var posterOriginal = '';
+        var posterMain = '', posterOriginal = '';
         if (raw.poster) {
             posterOriginal = resolveImageUrl(raw.poster.originalUrl || raw.poster.mainUrl || raw.poster.previewUrl);
             posterMain = resolveImageUrl(raw.poster.mainUrl || raw.poster.originalUrl || raw.poster.previewUrl);
@@ -237,18 +201,9 @@
             posterMain = resolveImageUrl(raw.image.preview || raw.image.original);
         }
 
-        var genres = Array.isArray(raw.genres) ? raw.genres.map(function (g) {
-            return { id: String(g.id || ''), name: g.russian || g.name || '', kind: g.kind || 'genre' };
-        }) : [];
-
-        var studios = Array.isArray(raw.studios) ? raw.studios.map(function (s) {
-            return { id: String(s.id || ''), name: s.name || '' };
-        }) : [];
-
-        var scoresStats = Array.isArray(raw.scoresStats) ? raw.scoresStats : (Array.isArray(raw.rates_scores_stats) ? raw.rates_scores_stats.map(function (it) {
-            return { score: it.name, count: it.value };
-        }) : []);
-
+        var genres = Array.isArray(raw.genres) ? raw.genres.map(function (g) { return { id: String(g.id || ''), name: g.russian || g.name || '', kind: g.kind || 'genre' }; }) : [];
+        var studios = Array.isArray(raw.studios) ? raw.studios.map(function (s) { return { id: String(s.id || ''), name: s.name || '' }; }) : [];
+        var scoresStats = Array.isArray(raw.scoresStats) ? raw.scoresStats : (Array.isArray(raw.rates_scores_stats) ? raw.rates_scores_stats.map(function (it) { return { score: it.name, count: it.value }; }) : []);
         var totalVotes = 0;
         for (var i = 0; i < scoresStats.length; i++) totalVotes += Number(scoresStats[i].count || 0);
 
@@ -266,7 +221,6 @@
                 }
             }
         }
-
         var chronologyList = [];
         if (Array.isArray(raw.chronology)) {
             for (var c = 0; c < raw.chronology.length; c++) {
@@ -274,52 +228,23 @@
                 if (ch) chronologyList.push(ch);
             }
         }
-
         var screenshots = Array.isArray(raw.screenshots) ? raw.screenshots.map(function (sc) {
             var orig = resolveImageUrl(sc.originalUrl || sc.original);
             return { original: orig, preview: resolveImageUrl(sc.x332Url || sc.preview || orig) };
         }).filter(function (s) { return s.original; }) : [];
-
         var videos = Array.isArray(raw.videos) ? raw.videos.filter(function (v) { return v && v.url; }).map(function (v, idx) {
             return { id: String(v.id || idx), name: v.name || v.kind || 'Видео', kind: v.kind || 'pv', url: v.url };
         }) : [];
 
         var displayTitle = russian || name || english || 'Без названия';
-
         return {
-            id: id, shikimori_id: id, mal_id: String(raw.malId || raw.myanimelist_id || id),
-            title: displayTitle, name: displayTitle, russian: russian,
-            original_title: name, original_name: name, english: english, japanese: japanese,
-            license_name_ru: raw.licenseNameRu || raw.license_name_ru || '',
-            synonyms: synonyms, description: cleanShikimoriText(raw.description),
-            kind: kind, kind_label: KIND_LABELS[kind] || kind.toUpperCase(),
-            status: status, status_label: STATUS_LABELS[status] || status,
-            rating: rating, rating_label: RATING_LABELS[rating] || rating,
-            score: scoreNum > 0 ? scoreNum.toFixed(2) : '0.00', vote_average: scoreNum,
-            total_votes: totalVotes, scores_stats: scoresStats,
-            episodes: Number(raw.episodes) || 0,
-            episodes_aired: Number(raw.episodesAired !== undefined ? raw.episodesAired : raw.episodes_aired) || 0,
-            duration: Number(raw.duration) || 0,
-            aired_on: airedDate, released_on: releasedDate,
-            release_date: airedDate || (airedYear ? airedYear + '-01-01' : ''),
-            first_air_date: kind !== 'movie' ? (airedDate || (airedYear ? airedYear + '-01-01' : '')) : '',
-            release_year: airedYear || '—',
-            next_episode_at: raw.nextEpisodeAt || raw.next_episode_at || null,
-            poster: posterMain || './img/img_broken.svg',
-            poster_original: posterOriginal || posterMain || './img/img_broken.svg',
-            img: posterMain || './img/img_broken.svg',
-            background_image: (screenshots[0] && screenshots[0].original) || posterOriginal || posterMain || '',
-            genres: genres, studios: studios, related: relatedList,
-            chronology: chronologyList, screenshots: screenshots, videos: videos,
-            source: 'shikimori', type: kind === 'movie' ? 'movie' : 'tv'
+            id: id, shikimori_id: id, mal_id: String(raw.malId || raw.myanimelist_id || id), title: displayTitle, name: displayTitle, russian: russian, original_title: name, original_name: name, english: english, japanese: japanese, license_name_ru: raw.licenseNameRu || raw.license_name_ru || '', synonyms: synonyms, description: cleanShikimoriText(raw.description), kind: kind, kind_label: KIND_LABELS[kind] || kind.toUpperCase(), status: status, status_label: STATUS_LABELS[status] || status, rating: rating, rating_label: RATING_LABELS[rating] || rating, score: scoreNum > 0 ? scoreNum.toFixed(2) : '0.00', vote_average: scoreNum, total_votes: totalVotes, scores_stats: scoresStats, episodes: Number(raw.episodes) || 0, episodes_aired: Number(raw.episodesAired !== undefined ? raw.episodesAired : raw.episodes_aired) || 0, duration: Number(raw.duration) || 0, aired_on: airedDate, released_on: releasedDate, release_date: airedDate || (airedYear ? airedYear + '-01-01' : ''), first_air_date: kind !== 'movie' ? (airedDate || (airedYear ? airedYear + '-01-01' : '')) : '', release_year: airedYear || '—', next_episode_at: raw.nextEpisodeAt || raw.next_episode_at || null, poster: posterMain || './img/img_broken.svg', poster_original: posterOriginal || posterMain || './img/img_broken.svg', img: posterMain || './img/img_broken.svg', background_image: (screenshots[0] && screenshots[0].original) || posterOriginal || posterMain || '', genres: genres, studios: studios, related: relatedList, chronology: chronologyList, screenshots: screenshots, videos: videos, source: 'shikimori', type: kind === 'movie' ? 'movie' : 'tv'
         };
     }
 
     var ShikimoriAPI = {
         fetchCatalog: function (params, onSuccess, onError) {
-            var page = Number(params.page) || 1;
-            var limit = Number(params.limit) || CONFIG.pageSize;
-            var order = params.order || 'popularity';
+            var page = Number(params.page) || 1, limit = Number(params.limit) || CONFIG.pageSize, order = params.order || 'popularity';
             var args = ['page: ' + page, 'limit: ' + limit, 'order: ' + order, 'censored: true'];
             if (params.status) args.push('status: "' + String(params.status).replace(/"/g, '') + '"');
             if (params.kind) args.push('kind: "' + String(params.kind).replace(/"/g, '') + '"');
@@ -328,11 +253,7 @@
 
             var query = '{ animes(' + args.join(', ') + ') { id malId name russian english japanese kind rating score status episodes episodesAired duration airedOn { year month day date } releasedOn { year month day date } poster { originalUrl mainUrl previewUrl } genres { id name russian kind } studios { id name } } }';
 
-            httpRequest({
-                url: getBaseDomain() + '/api/graphql',
-                method: 'POST',
-                body: JSON.stringify({ query: query })
-            }, function (json) {
+            httpRequest({ url: getBaseDomain() + '/api/graphql', method: 'POST', body: JSON.stringify({ query: query }) }, function (json) {
                 var list = (json && json.data && Array.isArray(json.data.animes)) ? json.data.animes : [];
                 var normalized = list.map(normalizeAnimeItem).filter(Boolean);
                 onSuccess({ results: normalized, page: page, total_pages: normalized.length >= limit ? page + 1 : page });
@@ -348,17 +269,11 @@
                 }, onError);
             });
         },
-
         fetchAnimeFull: function (animeId, onSuccess, onError) {
             var cleanId = String(animeId).replace(/[^0-9]/g, '');
             if (!cleanId) { if (onError) onError(new Error('Некорректный ID аниме')); return; }
             var query = '{ animes(ids: "' + cleanId + '", limit: 1) { id malId name russian licenseNameRu english japanese synonyms kind rating score status episodes episodesAired duration airedOn { year month day date } releasedOn { year month day date } nextEpisodeAt franchise description poster { originalUrl mainUrl previewUrl } genres { id name russian kind } studios { id name imageUrl } scoresStats { score count } statusesStats { status count } related { id relationKind relationText anime { id name russian kind score status episodes episodesAired airedOn { year date } poster { mainUrl previewUrl originalUrl } } } screenshots { id originalUrl x332Url } videos { id url name kind imageUrl } chronology { id name russian kind score status episodes airedOn { year date } poster { mainUrl previewUrl originalUrl } } } }';
-
-            httpRequest({
-                url: getBaseDomain() + '/api/graphql',
-                method: 'POST',
-                body: JSON.stringify({ query: query })
-            }, function (json) {
+            httpRequest({ url: getBaseDomain() + '/api/graphql', method: 'POST', body: JSON.stringify({ query: query }) }, function (json) {
                 var raw = json && json.data && Array.isArray(json.data.animes) && json.data.animes[0];
                 if (!raw) { if (onError) onError(new Error('Аниме не найдено')); return; }
                 onSuccess(normalizeAnimeItem(raw));
@@ -372,25 +287,17 @@
                 }, onError);
             });
         },
-
         fetchSimilar: function (animeId, onSuccess, onError) {
             var cleanId = String(animeId).replace(/[^0-9]/g, '');
-            httpRequest({ url: getBaseDomain() + '/api/animes/' + cleanId + '/similar', method: 'GET' }, function (list) {
-                onSuccess((Array.isArray(list) ? list : []).map(normalizeAnimeItem).filter(Boolean));
-            }, onError);
+            httpRequest({ url: getBaseDomain() + '/api/animes/' + cleanId + '/similar', method: 'GET' }, function (list) { onSuccess((Array.isArray(list) ? list : []).map(normalizeAnimeItem).filter(Boolean)); }, onError);
         },
-
         fetchCalendar: function (onSuccess, onError) {
             httpRequest({ url: getBaseDomain() + '/api/calendar', method: 'GET', ttlMinutes: 15 }, function (entries) {
                 var results = [];
                 (Array.isArray(entries) ? entries : []).forEach(function (entry) {
                     if (entry && entry.anime) {
                         var item = normalizeAnimeItem(entry.anime);
-                        if (item) {
-                            item.next_episode = entry.next_episode;
-                            item.next_episode_at = entry.next_episode_at;
-                            results.push(item);
-                        }
+                        if (item) { item.next_episode = entry.next_episode; item.next_episode_at = entry.next_episode_at; results.push(item); }
                     }
                 });
                 onSuccess(results);
@@ -452,35 +359,24 @@
         var expectedType = anime.kind === 'movie' ? 'movie' : 'tv';
 
         function openGlobalSearchFallback() {
-            if (Lampa.Search && typeof Lampa.Search.open === 'function') {
-                Lampa.Search.open({ input: anime.russian || anime.original_title || anime.title });
-            }
+            if (Lampa.Search && typeof Lampa.Search.open === 'function') Lampa.Search.open({ input: anime.russian || anime.original_title || anime.title });
         }
 
-        if (!Lampa.Api || typeof Lampa.Api.search !== 'function') {
-            openGlobalSearchFallback();
-            return;
-        }
+        if (!Lampa.Api || typeof Lampa.Api.search !== 'function') { openGlobalSearchFallback(); return; }
 
-        if (Lampa.Loading) Lampa.Loading.start(function () { Lampa.Loading.stop(); });
+        Lampa.Activity.loader(true);
 
         Lampa.Api.search({ query: encodeURIComponent(queries[0] || anime.title) }, function (res) {
-            if (Lampa.Loading) Lampa.Loading.stop();
+            Lampa.Activity.loader(false);
             var candidates = [];
-            if (res && res.movie && Array.isArray(res.movie.results)) {
-                res.movie.results.forEach(function (m) { m._media_type = 'movie'; candidates.push(m); });
-            }
-            if (res && res.tv && Array.isArray(res.tv.results)) {
-                res.tv.results.forEach(function (t) { t._media_type = 'tv'; candidates.push(t); });
-            }
+            if (res && res.movie && Array.isArray(res.movie.results)) { res.movie.results.forEach(function (m) { m._media_type = 'movie'; candidates.push(m); }); }
+            if (res && res.tv && Array.isArray(res.tv.results)) { res.tv.results.forEach(function (t) { t._media_type = 'tv'; candidates.push(t); }); }
             if (!candidates.length && queries[1]) {
+                Lampa.Activity.loader(true);
                 Lampa.Api.search({ query: encodeURIComponent(queries[1]) }, function (retry) {
-                    if (retry && retry.tv && Array.isArray(retry.tv.results)) {
-                        retry.tv.results.forEach(function (t) { t._media_type = 'tv'; candidates.push(t); });
-                    }
-                    if (retry && retry.movie && Array.isArray(retry.movie.results)) {
-                        retry.movie.results.forEach(function (m) { m._media_type = 'movie'; candidates.push(m); });
-                    }
+                    Lampa.Activity.loader(false);
+                    if (retry && retry.tv && Array.isArray(retry.tv.results)) { retry.tv.results.forEach(function (t) { t._media_type = 'tv'; candidates.push(t); }); }
+                    if (retry && retry.movie && Array.isArray(retry.movie.results)) { retry.movie.results.forEach(function (m) { m._media_type = 'movie'; candidates.push(m); }); }
                     presentCandidates(candidates);
                 });
                 return;
@@ -514,24 +410,16 @@
                     card: c
                 };
             });
-            menuItems.push({
-                title: 'Глобальный поиск в Lampa по названию',
-                subtitle: 'Искать «' + (anime.russian || anime.title) + '» во всех источниках',
-                searchFallback: true
-            });
+            menuItems.push({ title: 'Глобальный поиск в Lampa по названию', subtitle: 'Искать «' + (anime.russian || anime.title) + '» во всех источниках', searchFallback: true });
 
             if (Lampa.Select && typeof Lampa.Select.show === 'function') {
                 var prevCtrl = Lampa.Controller.enabled().name;
                 Lampa.Select.show({
-                    title: 'Сопоставление с каталогом Lampa (TMDB)',
+                    title: 'Сопоставление с каталогом Lampa',
                     items: menuItems,
                     onSelect: function (sel) {
                         if (sel.searchFallback) { openGlobalSearchFallback(); return; }
-                        Lampa.Activity.push({
-                            url: '', card: sel.card, id: sel.card.id,
-                            method: sel.card._media_type || (sel.card.name ? 'tv' : 'movie'),
-                            source: 'tmdb', component: 'full'
-                        });
+                        Lampa.Activity.push({ url: '', card: sel.card, id: sel.card.id, method: sel.card._media_type || (sel.card.name ? 'tv' : 'movie'), source: 'tmdb', component: 'full' });
                     },
                     onBack: function () { Lampa.Controller.toggle(prevCtrl || 'content'); }
                 });
@@ -560,18 +448,12 @@
 
     function openAnimeFullActivity(anime) {
         if (!window.Lampa || !Lampa.Activity) return;
-        Lampa.Activity.push({
-            url: '', title: 'Shikimori — ' + (anime.title || 'Аниме'),
-            component: 'shikimori_full', anime_id: anime.id, card: anime, page: 1
-        });
+        Lampa.Activity.push({ url: '', title: 'Shikimori — ' + (anime.title || 'Аниме'), component: 'shikimori_full', anime_id: anime.id, card: anime, page: 1 });
     }
 
     function openCategoryActivity(params) {
         if (!window.Lampa || !Lampa.Activity) return;
-        Lampa.Activity.push({
-            url: '', title: 'Shikimori — ' + (params.title || 'Каталог'),
-            component: 'shikimori_category', filter_params: params, page: 1
-        });
+        Lampa.Activity.push({ url: '', title: 'Shikimori — ' + (params.title || 'Каталог'), component: 'shikimori_category', filter_params: params, page: 1 });
     }
 
     function showGenresSelector(activeCtrl) {
@@ -591,61 +473,18 @@
                 var q = (val || '').trim();
                 if (q) openCategoryActivity({ title: 'Поиск: ' + q, search: q, order: 'popularity' });
             });
-        } else if (Lampa.Search && typeof Lampa.Search.open === 'function') {
-            Lampa.Search.open({});
-        }
-    }
-
-    // Полностью обновленный обработчик пульта (Controller)
-    function bindStandardController(scroll, getLastFocused) {
-        Lampa.Controller.add('content', {
-            toggle: function () {
-                var container = scroll.render();
-                Lampa.Controller.collectionSet(container);
-                
-                var target = getLastFocused();
-                // Если элемент ранее не был сфокусирован, либо скрыт, принудительно ставим на первый видимый
-                if (!target || !$(target).is(':visible')) {
-                    target = container.find('.selector:visible').eq(0)[0];
-                }
-                Lampa.Controller.collectionFocus(target || false, container);
-            },
-            left: function () {
-                if (Lampa.Navigator.canmove('left')) Lampa.Navigator.move('left');
-                else Lampa.Controller.toggle('menu');
-            },
-            right: function () { 
-                // Убрали проверку canmove('right'), чтобы избежать застревания в кастомных сетках
-                Lampa.Navigator.move('right'); 
-            },
-            up: function () {
-                if (Lampa.Navigator.canmove('up')) Lampa.Navigator.move('up');
-                else Lampa.Controller.toggle('head');
-            },
-            down: function () { 
-                // Убрали проверку canmove('down'), чтобы скроллинг работал всегда
-                Lampa.Navigator.move('down'); 
-            },
-            back: function () { 
-                Lampa.Activity.backward(); 
-            }
-        });
-        Lampa.Controller.toggle('content');
+        } else if (Lampa.Search && typeof Lampa.Search.open === 'function') Lampa.Search.open({});
     }
 
     function ShikimoriMainComponent() {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
-        // Пустышка для предотвращения "script error" при случайном пересчете скролла ядром Lampa
         scroll.onEnd = function() {}; 
-        
-        var html = $('<div class="shikimori-main-container"></div>');
         var content = $('<div class="shiki-wrap"></div>');
         var lastFocused = null;
         var self = this;
 
         this.create = function () {
             injectPluginStyles();
-            this.activity.loader(true);
             var toolbar = $('<div class="shiki-toolbar"></div>');
             var buttons = [
                 { title: 'Поиск аниме', primary: true, action: showSearchPrompt },
@@ -667,7 +506,6 @@
             var holder = $('<div class="shiki-sections-holder"></div>');
             content.append(holder);
             scroll.append(content);
-            html.append(scroll.render());
             this.loadSections(holder);
             return this.render();
         };
@@ -675,6 +513,7 @@
         this.loadSections = function (holder) {
             var done = 0;
             var ok = false;
+            Lampa.Activity.loader(true);
             CATALOG_SECTIONS.forEach(function (sec) {
                 var block = $('<div class="shiki-section"></div>');
                 holder.append(block);
@@ -697,45 +536,49 @@
             });
             function check() {
                 if (done >= CATALOG_SECTIONS.length) {
-                    self.activity.loader(false);
+                    Lampa.Activity.loader(false);
                     if (!ok) {
                         var err = $('<div class="shiki-status-box"><div style="font-size:1.3em;margin-bottom:.6em">Не удалось загрузить данные Shikimori</div><div class="shiki-btn selector">Повторить загрузку</div></div>');
                         err.find('.selector').on('hover:focus', function () { lastFocused = this; }).on('hover:enter click', function () {
-                            holder.empty(); self.activity.loader(true); self.loadSections(holder);
+                            holder.empty(); self.loadSections(holder);
                         });
                         holder.append(err);
                     }
-                    
-                    // Освежаем коллекцию после окончания загрузки, чтобы активировался пульт
-                    if (Lampa.Controller.enabled().name === 'content') {
-                        Lampa.Controller.toggle('content');
-                    }
+                    if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
                 }
             }
         };
 
-        this.start = function () { bindStandardController(scroll, function () { return lastFocused; }); };
+        this.start = function () {
+            Lampa.Controller.add('content', {
+                toggle: function () {
+                    Lampa.Controller.collectionSet(scroll.render());
+                    Lampa.Controller.collectionFocus(lastFocused || false, scroll.render());
+                },
+                left: function () { if (Lampa.Navigator.canmove('left')) Lampa.Navigator.move('left'); else Lampa.Controller.toggle('menu'); },
+                right: function () { Lampa.Navigator.move('right'); },
+                up: function () { if (Lampa.Navigator.canmove('up')) Lampa.Navigator.move('up'); else Lampa.Controller.toggle('head'); },
+                down: function () { Lampa.Navigator.move('down'); },
+                back: function () { Lampa.Activity.backward(); }
+            });
+            Lampa.Controller.toggle('content');
+        };
         this.pause = function () {};
         this.stop = function () {};
-        this.render = function () { return html; };
-        this.destroy = function () { scroll.destroy(); html.remove(); };
+        this.render = function () { return scroll.render(); };
+        this.destroy = function () { scroll.destroy(); };
     }
 
     function ShikimoriCategoryComponent(object) {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
-        var html = $('<div class="shikimori-category-container"></div>');
         var content = $('<div class="shiki-wrap"></div>');
         var grid = $('<div class="shiki-grid"></div>');
         var lastFocused = null;
-        var currentPage = 1;
-        var totalPages = 1;
-        var loadingNext = false;
-        var self = this;
-        var filterParams = object.filter_params || {};
+        var currentPage = 1, totalPages = 1, loadingNext = false;
+        var self = this, filterParams = object.filter_params || {};
 
         this.create = function () {
             injectPluginStyles();
-            this.activity.loader(true);
             var bar = $('<div class="shiki-toolbar"></div>');
             var backBtn = $('<div class="shiki-btn selector">← Назад</div>');
             backBtn.on('hover:focus', function () { lastFocused = this; scroll.update($(this), true); }).on('hover:enter click', function () { Lampa.Activity.backward(); });
@@ -747,14 +590,11 @@
                     Lampa.Select.show({
                         title: 'Сортировка каталога',
                         items: [
-                            { title: 'По популярности', order: 'popularity' },
-                            { title: 'По рейтингу Shikimori', order: 'ranked' },
-                            { title: 'По дате выхода', order: 'aired_on' },
-                            { title: 'По алфавиту', order: 'name' }
+                            { title: 'По популярности', order: 'popularity' }, { title: 'По рейтингу Shikimori', order: 'ranked' },
+                            { title: 'По дате выхода', order: 'aired_on' }, { title: 'По алфавиту', order: 'name' }
                         ],
                         onSelect: function (s) {
-                            filterParams.order = s.order; currentPage = 1; grid.empty();
-                            self.activity.loader(true); self.loadPage(1);
+                            filterParams.order = s.order; currentPage = 1; grid.empty(); self.loadPage(1);
                         },
                         onBack: function () { Lampa.Controller.toggle('content'); }
                     });
@@ -763,44 +603,34 @@
             }
             content.append(bar).append(grid);
             scroll.onEnd = function () {
-                if (!filterParams.calendar && !loadingNext && currentPage < totalPages) {
-                    loadingNext = true; self.loadPage(currentPage + 1);
-                }
+                if (!filterParams.calendar && !loadingNext && currentPage < totalPages) { loadingNext = true; self.loadPage(currentPage + 1); }
             };
             scroll.append(content);
-            html.append(scroll.render());
             this.loadPage(1);
             return this.render();
         };
 
         this.loadPage = function (page) {
+            Lampa.Activity.loader(true);
             if (filterParams.calendar) {
                 ShikimoriAPI.fetchCalendar(function (items) {
-                    self.activity.loader(false);
+                    Lampa.Activity.loader(false);
                     if (!items || !items.length) { self.showEmpty('В календаре онгоингов нет записей.'); return; }
-                    items.slice(0, 60).forEach(function (a) {
-                        grid.append(createCardElement(a, openAnimeFullActivity, function (x, el) { lastFocused = el; scroll.update($(el), true); }));
-                    });
-                    
+                    items.slice(0, 60).forEach(function (a) { grid.append(createCardElement(a, openAnimeFullActivity, function (x, el) { lastFocused = el; scroll.update($(el), true); })); });
                     if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
-                }, function (err) { self.activity.loader(false); self.showEmpty(err.message || 'Ошибка календаря'); });
+                }, function (err) { Lampa.Activity.loader(false); self.showEmpty(err.message || 'Ошибка календаря'); });
                 return;
             }
             ShikimoriAPI.fetchCatalog({
-                page: page, limit: CONFIG.pageSize, order: filterParams.order || 'popularity',
-                status: filterParams.status || '', kind: filterParams.kind || '',
-                genre: filterParams.genre || '', search: filterParams.search || ''
+                page: page, limit: CONFIG.pageSize, order: filterParams.order || 'popularity', status: filterParams.status || '', kind: filterParams.kind || '', genre: filterParams.genre || '', search: filterParams.search || ''
             }, function (data) {
-                self.activity.loader(false); loadingNext = false;
+                Lampa.Activity.loader(false); loadingNext = false;
                 currentPage = data.page; totalPages = data.total_pages;
                 if (page === 1 && (!data.results || !data.results.length)) { self.showEmpty('Ничего не найдено.'); return; }
-                data.results.forEach(function (a) {
-                    grid.append(createCardElement(a, openAnimeFullActivity, function (x, el) { lastFocused = el; scroll.update($(el), true); }));
-                });
-                
+                data.results.forEach(function (a) { grid.append(createCardElement(a, openAnimeFullActivity, function (x, el) { lastFocused = el; scroll.update($(el), true); })); });
                 if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
             }, function (err) {
-                self.activity.loader(false); loadingNext = false;
+                Lampa.Activity.loader(false); loadingNext = false;
                 if (page === 1) self.showEmpty(err.message || 'Ошибка загрузки каталога.');
             });
         };
@@ -808,42 +638,50 @@
         this.showEmpty = function (msg) {
             grid.empty();
             var box = $('<div class="shiki-status-box"><div style="font-size:1.25em;margin-bottom:.8em">' + escapeHtml(msg) + '</div><div class="shiki-btn selector">Повторить</div></div>');
-            box.find('.selector').on('hover:focus', function () { lastFocused = this; }).on('hover:enter click', function () {
-                box.remove(); self.activity.loader(true); self.loadPage(1);
-            });
+            box.find('.selector').on('hover:focus', function () { lastFocused = this; }).on('hover:enter click', function () { box.remove(); self.loadPage(1); });
             content.append(box);
             if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
         };
 
-        this.start = function () { bindStandardController(scroll, function () { return lastFocused; }); };
+        this.start = function () {
+            Lampa.Controller.add('content', {
+                toggle: function () {
+                    Lampa.Controller.collectionSet(scroll.render());
+                    Lampa.Controller.collectionFocus(lastFocused || false, scroll.render());
+                },
+                left: function () { if (Lampa.Navigator.canmove('left')) Lampa.Navigator.move('left'); else Lampa.Controller.toggle('menu'); },
+                right: function () { Lampa.Navigator.move('right'); },
+                up: function () { if (Lampa.Navigator.canmove('up')) Lampa.Navigator.move('up'); else Lampa.Controller.toggle('head'); },
+                down: function () { Lampa.Navigator.move('down'); },
+                back: function () { Lampa.Activity.backward(); }
+            });
+            Lampa.Controller.toggle('content');
+        };
         this.pause = function () {};
         this.stop = function () {};
-        this.render = function () { return html; };
-        this.destroy = function () { scroll.destroy(); html.remove(); };
+        this.render = function () { return scroll.render(); };
+        this.destroy = function () { scroll.destroy(); };
     }
 
     function ShikimoriFullComponent(object) {
         var scroll = new Lampa.Scroll({ mask: true, over: true });
-        scroll.onEnd = function() {}; // Заглушка от ошибок
-        
-        var html = $('<div class="shikimori-full-container"></div>');
+        scroll.onEnd = function() {};
         var body = $('<div class="shiki-full"></div>');
         var lastFocused = null;
         var self = this;
 
         this.create = function () {
             injectPluginStyles();
-            this.activity.loader(true);
             scroll.append(body);
-            html.append(scroll.render());
+            Lampa.Activity.loader(true);
 
             var targetId = object.anime_id || (object.card && object.card.id);
             ShikimoriAPI.fetchAnimeFull(targetId, function (anime) {
-                self.activity.loader(false);
+                Lampa.Activity.loader(false);
                 self.buildCard(anime);
                 if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
             }, function (err) {
-                self.activity.loader(false);
+                Lampa.Activity.loader(false);
                 if (object.card && object.card.id) {
                     self.buildCard(normalizeAnimeItem(object.card));
                     if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
@@ -908,23 +746,18 @@
                 { label: 'Дата окончания', value: anime.released_on || (anime.status === 'ongoing' ? 'Выходит' : '—') },
                 { label: 'Возрастной рейтинг', value: anime.rating_label },
                 { label: 'Студия', value: anime.studios && anime.studios.length ? anime.studios.map(function (s) { return s.name; }).join(', ') : 'Не указана' }
-            ].forEach(function (sp) {
-                specs.append('<div><div class="shiki-spec__label">' + escapeHtml(sp.label) + '</div><div class="shiki-spec__value">' + escapeHtml(sp.value) + '</div></div>');
-            });
+            ].forEach(function (sp) { specs.append('<div><div class="shiki-spec__label">' + escapeHtml(sp.label) + '</div><div class="shiki-spec__value">' + escapeHtml(sp.value) + '</div></div>'); });
             infoBox.append(specs);
 
             if (anime.genres && anime.genres.length) {
                 var gRow = $('<div class="shiki-genres"></div>');
                 anime.genres.forEach(function (g) {
                     var tag = $('<div class="shiki-genre-tag selector">' + escapeHtml(g.name) + '</div>');
-                    tag.on('hover:focus', function () { lastFocused = this; scroll.update($(this), true); }).on('hover:enter click', function () {
-                        openCategoryActivity({ title: 'Жанр: ' + g.name, genre: g.id, order: 'popularity' });
-                    });
+                    tag.on('hover:focus', function () { lastFocused = this; scroll.update($(this), true); }).on('hover:enter click', function () { openCategoryActivity({ title: 'Жанр: ' + g.name, genre: g.id, order: 'popularity' }); });
                     gRow.append(tag);
                 });
                 infoBox.append(gRow);
             }
-
             infoBox.append('<div class="shiki-descr">' + escapeHtml(anime.description || 'Описание на русском языке отсутствует в базе Shikimori.') + '</div>');
             topWrap.append(posterBox).append(infoBox);
             body.append(topWrap);
@@ -960,19 +793,30 @@
             if (anime.chronology && anime.chronology.length > 1) {
                 var chSec = $('<div class="shiki-section"><div class="shiki-section__head"><div class="shiki-section__title">Хронология франшизы</div></div></div>');
                 var chGrid = $('<div class="shiki-grid"></div>');
-                anime.chronology.forEach(function (chItem) {
-                    chGrid.append(createCardElement(chItem, openAnimeFullActivity, function (a, el) { lastFocused = el; scroll.update($(el), true); }));
-                });
+                anime.chronology.forEach(function (chItem) { chGrid.append(createCardElement(chItem, openAnimeFullActivity, function (a, el) { lastFocused = el; scroll.update($(el), true); })); });
                 chSec.append(chGrid);
                 body.append(chSec);
             }
         };
 
-        this.start = function () { bindStandardController(scroll, function () { return lastFocused; }); };
+        this.start = function () {
+            Lampa.Controller.add('content', {
+                toggle: function () {
+                    Lampa.Controller.collectionSet(scroll.render());
+                    Lampa.Controller.collectionFocus(lastFocused || false, scroll.render());
+                },
+                left: function () { if (Lampa.Navigator.canmove('left')) Lampa.Navigator.move('left'); else Lampa.Controller.toggle('menu'); },
+                right: function () { Lampa.Navigator.move('right'); },
+                up: function () { if (Lampa.Navigator.canmove('up')) Lampa.Navigator.move('up'); else Lampa.Controller.toggle('head'); },
+                down: function () { Lampa.Navigator.move('down'); },
+                back: function () { Lampa.Activity.backward(); }
+            });
+            Lampa.Controller.toggle('content');
+        };
         this.pause = function () {};
         this.stop = function () {};
-        this.render = function () { return html; };
-        this.destroy = function () { scroll.destroy(); html.remove(); };
+        this.render = function () { return scroll.render(); };
+        this.destroy = function () { scroll.destroy(); };
     }
 
     function registerGlobalSearchSource() {
@@ -987,16 +831,9 @@
                     onComplete([{ title: 'Аниме в каталоге Shikimori', results: data.results }]);
                 }, function () { onComplete([]); });
             },
-            onCancel: function () {},
-            params: { lazy: true, align_left: true },
-            onMore: function (params, close) {
-                close();
-                openCategoryActivity({ title: 'Поиск: ' + params.query, search: params.query, order: 'popularity' });
-            },
-            onSelect: function (params, close) {
-                close();
-                if (params && params.element) openAnimeFullActivity(params.element);
-            }
+            onCancel: function () {}, params: { lazy: true, align_left: true },
+            onMore: function (params, close) { close(); openCategoryActivity({ title: 'Поиск: ' + params.query, search: params.query, order: 'popularity' }); },
+            onSelect: function (params, close) { close(); if (params && params.element) openAnimeFullActivity(params.element); }
         });
     }
 
@@ -1009,33 +846,19 @@
         Lampa.Component.add('shikimori_full', ShikimoriFullComponent);
 
         var svgIcon = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-        function openMain() {
-            Lampa.Activity.push({ url: '', title: 'Shikimori — Каталог аниме', component: 'shikimori_main', page: 1 });
-        }
-        if (Lampa.Menu && typeof Lampa.Menu.addButton === 'function') {
-            Lampa.Menu.addButton(svgIcon, 'Shikimori', openMain);
-        } else {
+        function openMain() { Lampa.Activity.push({ url: '', title: 'Shikimori — Каталог аниме', component: 'shikimori_main', page: 1 }); }
+        if (Lampa.Menu && typeof Lampa.Menu.addButton === 'function') { Lampa.Menu.addButton(svgIcon, 'Shikimori', openMain); } else {
             var item = $('<li class="menu__item selector" data-action="shikimori"><div class="menu__ico">' + svgIcon + '</div><div class="menu__text">Shikimori</div></li>');
             item.on('hover:enter click', openMain);
             $('.menu .menu__list').eq(0).append(item);
         }
-
         registerGlobalSearchSource();
     }
 
     if (window.Lampa) {
         if (window.appready) initPlugin();
-        else if (Lampa.Listener) {
-            Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') initPlugin(); });
-        }
+        else if (Lampa.Listener) Lampa.Listener.follow('app', function (e) { if (e.type === 'ready') initPlugin(); });
     }
 
-    window.ShikimoriLampaPlugin = {
-        manifest: PLUGIN_MANIFEST,
-        api: ShikimoriAPI,
-        normalizeAnimeItem: normalizeAnimeItem,
-        cleanShikimoriText: cleanShikimoriText,
-        genres: GENRES_LIST,
-        sections: CATALOG_SECTIONS
-    };
+    window.ShikimoriLampaPlugin = { manifest: PLUGIN_MANIFEST, api: ShikimoriAPI, normalizeAnimeItem: normalizeAnimeItem, cleanShikimoriText: cleanShikimoriText, genres: GENRES_LIST, sections: CATALOG_SECTIONS };
 })();
