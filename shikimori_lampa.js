@@ -6,7 +6,7 @@
 
     var PLUGIN_MANIFEST = {
         type: 'video',
-        version: '3.0.0', // Версия полностью на нативном движке Lampa
+        version: '3.0.1',
         name: 'Shikimori',
         description: 'Каталог аниме Shikimori (Native UI) для Lampa',
         component: 'shikimori_page'
@@ -19,13 +19,11 @@
         pageSize: 30
     };
 
-    // Очистка текста от тегов
     function cleanShikimoriText(text) {
         if (!text) return '';
         return String(text).replace(/\[.*?\]/g, '').replace(/\r\n/g, '\n').trim();
     }
 
-    // Запросы к API (GraphQL / REST)
     var ShikimoriAPI = {
         fetchCatalog: function (params, onSuccess, onError) {
             var page = Number(params.page) || 1;
@@ -50,7 +48,6 @@
                 onSuccess(list);
             })
             .catch(function () {
-                // Запасной REST API запрос, если GraphQL упал
                 var q = ['page=' + page, 'limit=' + limit, 'order=' + order];
                 if (params.status) q.push('status=' + params.status);
                 if (params.kind) q.push('kind=' + params.kind);
@@ -66,7 +63,6 @@
         }
     };
 
-    // Нативный алгоритм связывания Shikimori -> Lampa (TMDB)
     function matchAndWatchInLampa(anime) {
         if (!window.Lampa) return;
         var queries = [anime.russian, anime.name].filter(Boolean);
@@ -79,7 +75,7 @@
 
         if (!Lampa.Api || typeof Lampa.Api.search !== 'function') { openGlobalSearchFallback(); return; }
 
-        Lampa.Activity.loader(true);
+        if (Lampa.Loading && typeof Lampa.Loading.start === 'function') Lampa.Loading.start(function () { Lampa.Loading.stop(); });
 
         Lampa.Api.search({ query: encodeURIComponent(queries[0] || anime.name) }, function (res) {
             var candidates = [];
@@ -88,17 +84,17 @@
             
             if (!candidates.length && queries[1]) {
                 Lampa.Api.search({ query: encodeURIComponent(queries[1]) }, function (retry) {
-                    Lampa.Activity.loader(false);
+                    if (Lampa.Loading && typeof Lampa.Loading.stop === 'function') Lampa.Loading.stop();
                     if (retry && retry.tv && Array.isArray(retry.tv.results)) { retry.tv.results.forEach(function (t) { t._media_type = 'tv'; candidates.push(t); }); }
                     if (retry && retry.movie && Array.isArray(retry.movie.results)) { retry.movie.results.forEach(function (m) { m._media_type = 'movie'; candidates.push(m); }); }
                     presentCandidates(candidates);
                 });
                 return;
             }
-            Lampa.Activity.loader(false);
+            if (Lampa.Loading && typeof Lampa.Loading.stop === 'function') Lampa.Loading.stop();
             presentCandidates(candidates);
         }, function() {
-            Lampa.Activity.loader(false);
+            if (Lampa.Loading && typeof Lampa.Loading.stop === 'function') Lampa.Loading.stop();
             openGlobalSearchFallback();
         });
 
@@ -115,7 +111,6 @@
             });
             scored.sort(function (a, b) { return b.score - a.score; });
 
-            // Если рейтинг совпадения очень высокий - открываем сразу без лишних вопросов
             if (scored[0].score >= 65) {
                 var best = scored[0].item;
                 Lampa.Activity.push({ url: '', card: best, id: best.id, method: best._media_type || (best.name ? 'tv' : 'movie'), source: 'tmdb', component: 'full' });
@@ -147,12 +142,11 @@
         }
     }
 
-    // Главный визуальный компонент (Нативный движок Lampa)
     function ShikimoriComponent() {
         var comp = this;
         var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div></div>');
-        var body = $('<div class="category-full"></div>'); // Нативная сетка Lampa
+        var body = $('<div class="category-full"></div>');
         
         var current_page = 1;
         var is_loading = false;
@@ -183,7 +177,6 @@
         };
 
         this.buildFilterButton = function () {
-            // Стандартный элемент настроек/фильтров Lampa
             var filter_btn = $('<div class="settings-folder selector" style="margin-bottom: 20px;"><div class="settings-folder__icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg></div><div class="settings-folder__name">Фильтры, Сортировка и Поиск</div><div class="settings-folder__value">Настроить Shikimori</div></div>');
 
             filter_btn.on('hover:focus', function () { lastFocused = this; });
@@ -233,12 +226,12 @@
 
         this.loadData = function () {
             is_loading = true;
-            Lampa.Activity.loader(true);
+            if (comp.activity && typeof comp.activity.loader === 'function') comp.activity.loader(true);
 
             ShikimoriAPI.fetchCatalog(
                 { page: current_page, limit: CONFIG.pageSize, order: filter_params.order, kind: filter_params.kind, status: filter_params.status, search: filter_params.search },
                 function (results) {
-                    Lampa.Activity.loader(false);
+                    if (comp.activity && typeof comp.activity.loader === 'function') comp.activity.loader(false);
                     is_loading = false;
                     
                     if (results.length < CONFIG.pageSize) has_more = false;
@@ -252,7 +245,7 @@
                     if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
                 },
                 function () {
-                    Lampa.Activity.loader(false);
+                    if (comp.activity && typeof comp.activity.loader === 'function') comp.activity.loader(false);
                     is_loading = false;
                     has_more = false;
                     if (current_page === 1) body.append('<div class="empty">Ошибка сети. Сервер Shikimori недоступен.</div>');
@@ -262,32 +255,27 @@
 
         this.build = function (data) {
             data.forEach(function (anime) {
-                // Извлекаем картинку
                 var posterUrl = '';
                 if (anime.poster) posterUrl = anime.poster.originalUrl || anime.poster.mainUrl || anime.poster.previewUrl || '';
                 if (posterUrl && posterUrl.indexOf('/') === 0) posterUrl = CONFIG.primaryDomain + posterUrl;
 
                 var releaseYear = anime.airedOn && anime.airedOn.year ? anime.airedOn.year : (anime.aired_on ? anime.aired_on.slice(0, 4) : '—');
 
-                // Создаем Нативную карточку Lampa
                 var item = {
                     title: anime.russian || anime.name,
                     original_title: anime.name,
-                    release_date: releaseYear + '-01-01', // Форматируем для Lampa
+                    release_date: releaseYear + '-01-01',
                     img: posterUrl || './img/img_broken.svg',
                     background: posterUrl || './img/img_broken.svg'
                 };
 
-                // Используем встроенный в Lampa шаблонизатор (это дает 100% работу пульта и тачскрина)
                 var card = Lampa.Template.get('card', item);
                 card.find('.card__image').attr('src', item.img);
 
-                // Добавляем красивый бэйдж с оценкой
                 if (anime.score && parseFloat(anime.score) > 0) {
                     card.find('.card__view').append('<div class="card__vote">' + parseFloat(anime.score).toFixed(1) + '</div>');
                 }
 
-                // Фокус и клик (нативно)
                 card.on('hover:focus', function () { lastFocused = card[0]; });
                 card.on('hover:enter click', function () { matchAndWatchInLampa(anime); });
 
@@ -296,7 +284,6 @@
         };
 
         this.start = function () {
-            // Привязка родного контроллера (пульт/свайпы)
             Lampa.Controller.add('content', {
                 toggle: function () {
                     Lampa.Controller.collectionSet(scroll.render());
@@ -329,7 +316,6 @@
         this.destroy = function () { scroll.destroy(); html.remove(); body.remove(); };
     }
 
-    // Инициализация
     function initPlugin() {
         if (!window.Lampa) return;
         if (Lampa.Manifest) Lampa.Manifest.plugins = PLUGIN_MANIFEST;
