@@ -6,7 +6,7 @@
 
     var PLUGIN_MANIFEST = {
         type: 'video',
-        version: '3.0.1',
+        version: '3.1.0',
         name: 'Shikimori',
         description: 'Каталог аниме Shikimori (Native UI) для Lampa',
         component: 'shikimori_page'
@@ -18,11 +18,6 @@
         timeout: 12000,
         pageSize: 30
     };
-
-    function cleanShikimoriText(text) {
-        if (!text) return '';
-        return String(text).replace(/\[.*?\]/g, '').replace(/\r\n/g, '\n').trim();
-    }
 
     var ShikimoriAPI = {
         fetchCatalog: function (params, onSuccess, onError) {
@@ -145,7 +140,9 @@
     function ShikimoriComponent() {
         var comp = this;
         var scroll = new Lampa.Scroll({ mask: true, over: true });
-        var html = $('<div></div>');
+        
+        var content_wrapper = $('<div></div>');
+        var filter_btn = $('<div class="settings-folder selector" style="margin-bottom: 20px;"><div class="settings-folder__icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg></div><div class="settings-folder__name">Фильтры, Сортировка и Поиск</div><div class="settings-folder__value">Настроить Shikimori</div></div>');
         var body = $('<div class="category-full"></div>');
         
         var current_page = 1;
@@ -161,8 +158,10 @@
         };
 
         this.create = function () {
-            html.append(scroll.render());
-            scroll.append(body);
+            // Чтобы Lampa правильно высчитывала сетку, отделяем кнопку от сетки карточек
+            content_wrapper.append(filter_btn);
+            content_wrapper.append(body);
+            scroll.append(content_wrapper);
 
             this.buildFilterButton();
             this.loadData();
@@ -177,9 +176,12 @@
         };
 
         this.buildFilterButton = function () {
-            var filter_btn = $('<div class="settings-folder selector" style="margin-bottom: 20px;"><div class="settings-folder__icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg></div><div class="settings-folder__name">Фильтры, Сортировка и Поиск</div><div class="settings-folder__value">Настроить Shikimori</div></div>');
-
-            filter_btn.on('hover:focus', function () { lastFocused = this; });
+            // Привязываем обновление скролла при наведении (решает проблему с неработающим пультом)
+            filter_btn.on('hover:focus', function () { 
+                lastFocused = filter_btn[0]; 
+                scroll.update(filter_btn, true); 
+            });
+            
             filter_btn.on('hover:enter click', function () {
                 var menu = [
                     { title: 'Сортировка: ' + filter_names.order[filter_params.order], type: 'order' },
@@ -212,8 +214,6 @@
                     onBack: function () { Lampa.Controller.toggle('content'); }
                 });
             });
-
-            body.append(filter_btn);
         };
 
         this.reload = function () {
@@ -221,6 +221,7 @@
             body.find('.empty').remove();
             current_page = 1;
             has_more = true;
+            lastFocused = filter_btn[0]; // Сбрасываем фокус на кнопку фильтров
             this.loadData();
         };
 
@@ -255,28 +256,44 @@
 
         this.build = function (data) {
             data.forEach(function (anime) {
+                // Извлекаем картинку с подстраховкой на разные форматы API
                 var posterUrl = '';
-                if (anime.poster) posterUrl = anime.poster.originalUrl || anime.poster.mainUrl || anime.poster.previewUrl || '';
-                if (posterUrl && posterUrl.indexOf('/') === 0) posterUrl = CONFIG.primaryDomain + posterUrl;
+                if (anime.poster) posterUrl = anime.poster.mainUrl || anime.poster.originalUrl || anime.poster.previewUrl || '';
+                else if (anime.image) posterUrl = anime.image.original || anime.image.preview || '';
+                
+                if (posterUrl && !posterUrl.startsWith('http')) {
+                    if (!posterUrl.startsWith('/')) posterUrl = '/' + posterUrl;
+                    posterUrl = CONFIG.primaryDomain + posterUrl;
+                }
 
+                // Исправление надписи "{release_year}"
                 var releaseYear = anime.airedOn && anime.airedOn.year ? anime.airedOn.year : (anime.aired_on ? anime.aired_on.slice(0, 4) : '—');
 
                 var item = {
                     title: anime.russian || anime.name,
                     original_title: anime.name,
-                    release_date: releaseYear + '-01-01',
+                    release_year: releaseYear, // Теперь передаем именно release_year, как требует шаблон Lampa
                     img: posterUrl || './img/img_broken.svg',
                     background: posterUrl || './img/img_broken.svg'
                 };
 
                 var card = Lampa.Template.get('card', item);
-                card.find('.card__image').attr('src', item.img);
+                
+                // Исправление неработающих постеров: принудительно обходим родной Lampa lazy-loader
+                var img = card.find('img');
+                img.removeClass('lazy'); 
+                img.attr('src', item.img);
 
                 if (anime.score && parseFloat(anime.score) > 0) {
                     card.find('.card__view').append('<div class="card__vote">' + parseFloat(anime.score).toFixed(1) + '</div>');
                 }
 
-                card.on('hover:focus', function () { lastFocused = card[0]; });
+                // Исправление неработающего скроллинга при использовании пульта
+                card.on('hover:focus', function () { 
+                    lastFocused = card[0]; 
+                    scroll.update(card, true); // Принудительно сдвигает контейнер за выбранной карточкой
+                });
+                
                 card.on('hover:enter click', function () { matchAndWatchInLampa(anime); });
 
                 body.append(card);
@@ -287,7 +304,7 @@
             Lampa.Controller.add('content', {
                 toggle: function () {
                     Lampa.Controller.collectionSet(scroll.render());
-                    Lampa.Controller.collectionFocus(lastFocused || false, scroll.render());
+                    Lampa.Controller.collectionFocus(lastFocused || filter_btn[0], scroll.render());
                 },
                 left: function () {
                     if (Lampa.Navigator.canmove('left')) Lampa.Navigator.move('left');
@@ -313,7 +330,7 @@
         this.pause = function () {};
         this.stop = function () {};
         this.render = function () { return scroll.render(); };
-        this.destroy = function () { scroll.destroy(); html.remove(); body.remove(); };
+        this.destroy = function () { scroll.destroy(); content_wrapper.remove(); };
     }
 
     function initPlugin() {
