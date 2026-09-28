@@ -6,7 +6,7 @@
 
     var PLUGIN_MANIFEST = {
         type: 'video',
-        version: '4.0.0', // Полный переход на Lampa.InteractionCategory
+        version: '4.0.1', 
         name: 'Shikimori',
         description: 'Каталог аниме Shikimori (Native Lampa API)',
         component: 'shikimori_category'
@@ -157,7 +157,7 @@
                 release_year: releaseYear, 
                 img: posterUrl || './img/img_broken.svg',
                 background_image: posterUrl || './img/img_broken.svg',
-                score: anime.score,
+                vote_average: anime.score ? parseFloat(anime.score) : 0, // Используем нативное поле Lampa для вывода рейтинга
                 anime_data: anime // Сохраняем оригинал для передачи в плеер
             });
         });
@@ -204,10 +204,7 @@
             card.onEnter = function () {
                 matchAndWatchInLampa(element.anime_data);
             };
-            
-            if (element.score && parseFloat(element.score) > 0) {
-                card.find('.card__view').append('<div class="card__vote">' + parseFloat(element.score).toFixed(1) + '</div>');
-            }
+            // Ошибка card.find устранена: рейтинг теперь рисуется нативно через поле vote_average
         };
 
         // Меню фильтров
@@ -283,7 +280,7 @@
             $('.menu .menu__list').eq(0).append(item);
         }
 
-        // Интеграция кнопки фильтра в верхнюю шапку (как в ПРимер.js)
+        // Интеграция кнопки фильтра в верхнюю шапку
         var filterButton = $("<div class=\"head__action head__settings selector\">\n            <svg height=\"36\" viewBox=\"0 0 38 36\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n                <rect x=\"1.5\" y=\"1.5\" width=\"35\" height=\"33\" rx=\"1.5\" stroke=\"currentColor\" stroke-width=\"3\"></rect>\n                <rect x=\"7\" y=\"8\" width=\"24\" height=\"3\" rx=\"1.5\" fill=\"currentColor\"></rect>\n                <rect x=\"7\" y=\"16\" width=\"24\" height=\"3\" rx=\"1.5\" fill=\"currentColor\"></rect>\n                <rect x=\"7\" y=\"25\" width=\"24\" height=\"3\" rx=\"1.5\" fill=\"currentColor\"></rect>\n                <circle cx=\"13.5\" cy=\"17.5\" r=\"3.5\" fill=\"currentColor\"></circle>\n                <circle cx=\"23.5\" cy=\"26.5\" r=\"3.5\" fill=\"currentColor\"></circle>\n                <circle cx=\"21.5\" cy=\"9.5\" r=\"3.5\" fill=\"currentColor\"></circle>\n            </svg>\n        </div>");
         
         var currentActivity;
