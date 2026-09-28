@@ -6,7 +6,7 @@
 
     var PLUGIN_MANIFEST = {
         type: 'video',
-        version: '2.4.0',
+        version: '2.5.0',
         name: 'Shikimori',
         description: 'Каталог аниме Shikimori (GraphQL + REST v1) для Lampa',
         component: 'shikimori_main'
@@ -596,29 +596,48 @@
         }
     }
 
+    // Полностью обновленный обработчик пульта (Controller)
     function bindStandardController(scroll, getLastFocused) {
         Lampa.Controller.add('content', {
             toggle: function () {
-                Lampa.Controller.collectionSet(scroll.render());
-                Lampa.Controller.collectionFocus(getLastFocused() || false, scroll.render());
+                var container = scroll.render();
+                Lampa.Controller.collectionSet(container);
+                
+                var target = getLastFocused();
+                // Если элемент ранее не был сфокусирован, либо скрыт, принудительно ставим на первый видимый
+                if (!target || !$(target).is(':visible')) {
+                    target = container.find('.selector:visible').eq(0)[0];
+                }
+                Lampa.Controller.collectionFocus(target || false, container);
             },
             left: function () {
                 if (Lampa.Navigator.canmove('left')) Lampa.Navigator.move('left');
                 else Lampa.Controller.toggle('menu');
             },
-            right: function () { if (Lampa.Navigator.canmove('right')) Lampa.Navigator.move('right'); },
+            right: function () { 
+                // Убрали проверку canmove('right'), чтобы избежать застревания в кастомных сетках
+                Lampa.Navigator.move('right'); 
+            },
             up: function () {
                 if (Lampa.Navigator.canmove('up')) Lampa.Navigator.move('up');
                 else Lampa.Controller.toggle('head');
             },
-            down: function () { if (Lampa.Navigator.canmove('down')) Lampa.Navigator.move('down'); },
-            back: function () { Lampa.Activity.backward(); }
+            down: function () { 
+                // Убрали проверку canmove('down'), чтобы скроллинг работал всегда
+                Lampa.Navigator.move('down'); 
+            },
+            back: function () { 
+                Lampa.Activity.backward(); 
+            }
         });
         Lampa.Controller.toggle('content');
     }
 
     function ShikimoriMainComponent() {
-        var scroll = new Lampa.Scroll({ mask: true, over: true, step: 260 });
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        // Пустышка для предотвращения "script error" при случайном пересчете скролла ядром Lampa
+        scroll.onEnd = function() {}; 
+        
         var html = $('<div class="shikimori-main-container"></div>');
         var content = $('<div class="shiki-wrap"></div>');
         var lastFocused = null;
@@ -686,7 +705,11 @@
                         });
                         holder.append(err);
                     }
-                    self.activity.toggle();
+                    
+                    // Освежаем коллекцию после окончания загрузки, чтобы активировался пульт
+                    if (Lampa.Controller.enabled().name === 'content') {
+                        Lampa.Controller.toggle('content');
+                    }
                 }
             }
         };
@@ -699,7 +722,7 @@
     }
 
     function ShikimoriCategoryComponent(object) {
-        var scroll = new Lampa.Scroll({ mask: true, over: true, step: 260, end_ratio: 2 });
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
         var html = $('<div class="shikimori-category-container"></div>');
         var content = $('<div class="shiki-wrap"></div>');
         var grid = $('<div class="shiki-grid"></div>');
@@ -758,7 +781,8 @@
                     items.slice(0, 60).forEach(function (a) {
                         grid.append(createCardElement(a, openAnimeFullActivity, function (x, el) { lastFocused = el; scroll.update($(el), true); }));
                     });
-                    self.activity.toggle();
+                    
+                    if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
                 }, function (err) { self.activity.loader(false); self.showEmpty(err.message || 'Ошибка календаря'); });
                 return;
             }
@@ -773,7 +797,8 @@
                 data.results.forEach(function (a) {
                     grid.append(createCardElement(a, openAnimeFullActivity, function (x, el) { lastFocused = el; scroll.update($(el), true); }));
                 });
-                self.activity.toggle();
+                
+                if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
             }, function (err) {
                 self.activity.loader(false); loadingNext = false;
                 if (page === 1) self.showEmpty(err.message || 'Ошибка загрузки каталога.');
@@ -787,7 +812,7 @@
                 box.remove(); self.activity.loader(true); self.loadPage(1);
             });
             content.append(box);
-            this.activity.toggle();
+            if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
         };
 
         this.start = function () { bindStandardController(scroll, function () { return lastFocused; }); };
@@ -798,7 +823,9 @@
     }
 
     function ShikimoriFullComponent(object) {
-        var scroll = new Lampa.Scroll({ mask: true, over: true, step: 280 });
+        var scroll = new Lampa.Scroll({ mask: true, over: true });
+        scroll.onEnd = function() {}; // Заглушка от ошибок
+        
         var html = $('<div class="shikimori-full-container"></div>');
         var body = $('<div class="shiki-full"></div>');
         var lastFocused = null;
@@ -814,17 +841,17 @@
             ShikimoriAPI.fetchAnimeFull(targetId, function (anime) {
                 self.activity.loader(false);
                 self.buildCard(anime);
-                self.activity.toggle();
+                if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
             }, function (err) {
                 self.activity.loader(false);
                 if (object.card && object.card.id) {
                     self.buildCard(normalizeAnimeItem(object.card));
-                    self.activity.toggle();
+                    if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
                 } else {
                     var box = $('<div class="shiki-status-box"><div style="font-size:1.3em;margin-bottom:.6em">' + escapeHtml(err.message || 'Ошибка карточки') + '</div><div class="shiki-btn selector">Назад</div></div>');
                     box.find('.selector').on('hover:focus', function () { lastFocused = this; }).on('hover:enter click', function () { Lampa.Activity.backward(); });
                     body.append(box);
-                    self.activity.toggle();
+                    if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
                 }
             });
             return this.render();
