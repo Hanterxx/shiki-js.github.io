@@ -6,7 +6,7 @@
 
     var PLUGIN_MANIFEST = {
         type: 'video',
-        version: '2.6.0',
+        version: '2.6.1',
         name: 'Shikimori',
         description: 'Каталог аниме Shikimori (GraphQL + REST v1) для Lampa',
         component: 'shikimori_main'
@@ -364,17 +364,12 @@
 
         if (!Lampa.Api || typeof Lampa.Api.search !== 'function') { openGlobalSearchFallback(); return; }
 
-        Lampa.Activity.loader(true);
-
         Lampa.Api.search({ query: encodeURIComponent(queries[0] || anime.title) }, function (res) {
-            Lampa.Activity.loader(false);
             var candidates = [];
             if (res && res.movie && Array.isArray(res.movie.results)) { res.movie.results.forEach(function (m) { m._media_type = 'movie'; candidates.push(m); }); }
             if (res && res.tv && Array.isArray(res.tv.results)) { res.tv.results.forEach(function (t) { t._media_type = 'tv'; candidates.push(t); }); }
             if (!candidates.length && queries[1]) {
-                Lampa.Activity.loader(true);
                 Lampa.Api.search({ query: encodeURIComponent(queries[1]) }, function (retry) {
-                    Lampa.Activity.loader(false);
                     if (retry && retry.tv && Array.isArray(retry.tv.results)) { retry.tv.results.forEach(function (t) { t._media_type = 'tv'; candidates.push(t); }); }
                     if (retry && retry.movie && Array.isArray(retry.movie.results)) { retry.movie.results.forEach(function (m) { m._media_type = 'movie'; candidates.push(m); }); }
                     presentCandidates(candidates);
@@ -513,7 +508,7 @@
         this.loadSections = function (holder) {
             var done = 0;
             var ok = false;
-            Lampa.Activity.loader(true);
+            self.activity.loader(true);
             CATALOG_SECTIONS.forEach(function (sec) {
                 var block = $('<div class="shiki-section"></div>');
                 holder.append(block);
@@ -536,7 +531,7 @@
             });
             function check() {
                 if (done >= CATALOG_SECTIONS.length) {
-                    Lampa.Activity.loader(false);
+                    self.activity.loader(false);
                     if (!ok) {
                         var err = $('<div class="shiki-status-box"><div style="font-size:1.3em;margin-bottom:.6em">Не удалось загрузить данные Shikimori</div><div class="shiki-btn selector">Повторить загрузку</div></div>');
                         err.find('.selector').on('hover:focus', function () { lastFocused = this; }).on('hover:enter click', function () {
@@ -611,26 +606,26 @@
         };
 
         this.loadPage = function (page) {
-            Lampa.Activity.loader(true);
+            self.activity.loader(true);
             if (filterParams.calendar) {
                 ShikimoriAPI.fetchCalendar(function (items) {
-                    Lampa.Activity.loader(false);
+                    self.activity.loader(false);
                     if (!items || !items.length) { self.showEmpty('В календаре онгоингов нет записей.'); return; }
                     items.slice(0, 60).forEach(function (a) { grid.append(createCardElement(a, openAnimeFullActivity, function (x, el) { lastFocused = el; scroll.update($(el), true); })); });
                     if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
-                }, function (err) { Lampa.Activity.loader(false); self.showEmpty(err.message || 'Ошибка календаря'); });
+                }, function (err) { self.activity.loader(false); self.showEmpty(err.message || 'Ошибка календаря'); });
                 return;
             }
             ShikimoriAPI.fetchCatalog({
                 page: page, limit: CONFIG.pageSize, order: filterParams.order || 'popularity', status: filterParams.status || '', kind: filterParams.kind || '', genre: filterParams.genre || '', search: filterParams.search || ''
             }, function (data) {
-                Lampa.Activity.loader(false); loadingNext = false;
+                self.activity.loader(false); loadingNext = false;
                 currentPage = data.page; totalPages = data.total_pages;
                 if (page === 1 && (!data.results || !data.results.length)) { self.showEmpty('Ничего не найдено.'); return; }
                 data.results.forEach(function (a) { grid.append(createCardElement(a, openAnimeFullActivity, function (x, el) { lastFocused = el; scroll.update($(el), true); })); });
                 if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
             }, function (err) {
-                Lampa.Activity.loader(false); loadingNext = false;
+                self.activity.loader(false); loadingNext = false;
                 if (page === 1) self.showEmpty(err.message || 'Ошибка загрузки каталога.');
             });
         };
@@ -673,15 +668,15 @@
         this.create = function () {
             injectPluginStyles();
             scroll.append(body);
-            Lampa.Activity.loader(true);
+            self.activity.loader(true);
 
             var targetId = object.anime_id || (object.card && object.card.id);
             ShikimoriAPI.fetchAnimeFull(targetId, function (anime) {
-                Lampa.Activity.loader(false);
+                self.activity.loader(false);
                 self.buildCard(anime);
                 if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
             }, function (err) {
-                Lampa.Activity.loader(false);
+                self.activity.loader(false);
                 if (object.card && object.card.id) {
                     self.buildCard(normalizeAnimeItem(object.card));
                     if (Lampa.Controller.enabled().name === 'content') Lampa.Controller.toggle('content');
