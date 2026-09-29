@@ -2,18 +2,20 @@
   'use strict';
 
   var PLUGIN_ID = 'lampa_shikimori_catalog';
-  var VERSION = '1.0.0';
+  var VERSION = '1.1.0';
   var API_ORIGIN = 'https://shikimori.one';
   var GRAPHQL_PATH = '/api/graphql';
   var PAGE_SIZE = 24;
   var CACHE_TTL = 15 * 60 * 1000;
   var CACHE_PREFIX = 'lampa_shikimori_v1:';
 
-  if (window[PLUGIN_ID]) return;
-  window[PLUGIN_ID] = { version: VERSION };
+  var previousInstance = window[PLUGIN_ID];
+  if (previousInstance && previousInstance.version === VERSION && previousInstance.initialized) return;
+  window[PLUGIN_ID] = previousInstance || {};
+  window[PLUGIN_ID].version = VERSION;
 
   function lampaReady() {
-    return window.Lampa && Lampa.Component && Lampa.Activity && Lampa.Maker;
+    return window.Lampa && Lampa.Component && Lampa.Activity && Lampa.Listener && Lampa.Scroll && Lampa.Controller && Lampa.Template;
   }
 
   function currentSeason() {
@@ -31,6 +33,7 @@
     genreTitle: 'Усі жанри',
     order: 'popularity'
   };
+  var activeCatalog = null;
 
   var labels = {
     kind: { tv: 'TV-серіал', movie: 'Фільм', ova: 'OVA', ona: 'ONA', special: 'Спецвипуск', tv_special: 'TV-спецвипуск', music: 'Музичне' },
@@ -153,8 +156,7 @@
   }
 
   function refreshCatalog() {
-    var active = Lampa.Activity.active();
-    if (active && active.component === 'shikimori_catalog' && active.activity) active.activity.refresh();
+    if (activeCatalog && typeof activeCatalog.reload === 'function') activeCatalog.reload();
   }
 
   function yearItems() {
@@ -193,37 +195,156 @@
   }
 
   function Catalog(object) {
-    var comp = Lampa.Maker.make('Category', object);
-    var filterIcon;
-    comp.use({
-      onCreate: function () {
-        var self = this;
-        this.activity.loader(true);
-        loadPage(1).then(function (data) { self.build(data); }).catch(function (e) { notifyError(e); self.empty({ title: 'Помилка Shikimori', descr: e.message }); });
-      },
-      onNext: function (resolve, reject) {
-        var self = this;
-        loadPage(object.page || 2).then(function (data) {
-          if (!data.results.length) { self.total_pages = object.page || 1; reject(); }
-          else resolve(data);
-        }).catch(function(e){ notifyError(e); reject(); });
-      },
-      onInstance: function (card, data) {
-        card.use({
-          onlyEnter: function () { Lampa.Activity.push({ title: data.title, component: 'shikimori_detail', anime_id: String(data.id), card: data }); },
-          onFocus: function () { if (data.poster && Lampa.Background) Lampa.Background.change(data.poster); }
+    var comp = this;
+    var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250, end_ratio: 2 });
+    var filterButton = $('<div class="settings-folder selector shikimori-filter"><div class="settings-folder__icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 5h16v2H4V5m3 6h10v2H7v-2m3 6h4v2h-4v-2Z"/></svg></div><div class="settings-folder__name">Фільтри й сортування</div><div class="settings-folder__value"></div></div>');
+    var body = $('<div class="category-full shikimori-grid"></div>');
+    var currentPage = 1;
+    var loading = false;
+    var hasMore = true;
+    var destroyed = false;
+    var requestToken = 0;
+    var lastFocused = filterButton[0];
+
+    function navigator() {
+      return window.Navigator || Lampa.Navigator;
+    }
+
+    function controllerIsContent() {
+      var enabled = Lampa.Controller.enabled && Lampa.Controller.enabled();
+      return Boolean(enabled && enabled.name === 'content');
+    }
+
+    function updateFilterText() {
+      var season = state.season ? state.season.replace('_', ' ') : 'усі сезони';
+      var status = labels.status[state.status] || 'усі статуси';
+      var kind = labels.kind[state.kind] || 'усі типи';
+      filterButton.find('.settings-folder__value').text(season + ' · ' + status + ' · ' + kind + ' · ' + state.genreTitle);
+    }
+
+    function isAttached(element) {
+      return Boolean(element && document.body && document.body.contains(element));
+    }
+
+    function focusCollection() {
+      var collection = scroll.render();
+      Lampa.Controller.collectionSet(collection);
+      var target = isAttached(lastFocused) ? lastFocused : filterButton[0];
+      Lampa.Controller.collectionFocus(target, collection);
+    }
+
+    function showMessage(text, className) {
+      body.html('<div class="shikimori-state ' + (className || '') + '">' + safe(text) + '</div>');
+    }
+
+    function appendCards(cards) {
+      cards.forEach(function (data) {
+        var anime = data.shikimori;
+        var card = Lampa.Template.get('card', data);
+        card.addClass('selector');
+        card.attr('data-shikimori-id', data.id);
+
+        var image = card.find('img');
+        if (data.poster) image.attr('src', data.poster).removeClass('lazy');
+        image.on('error', function () { this.onerror = null; this.src = './img/img_broken.svg'; });
+
+        card.find('.card__title').text(data.title);
+        if (data.release_year) card.find('.card__age').text(data.release_year);
+        if (anime && anime.kind) card.find('.card__view').append('<div class="card__type">' + safe(labels.kind[anime.kind] || anime.kind) + '</div>');
+        if (anime && Number(anime.score) > 0) card.find('.card__view').append('<div class="card__vote">' + Number(anime.score).toFixed(1) + '</div>');
+
+        card.on('hover:focus', function () {
+          lastFocused = card[0];
+          scroll.update(card, true);
+          if (data.poster && Lampa.Background) Lampa.Background.change(data.poster);
         });
-      },
-      onStart: function () {
-        if (!filterIcon && Lampa.Head && Lampa.Head.addIcon) {
-          filterIcon = Lampa.Head.addIcon('<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 5h16v2H4V5m3 6h10v2H7v-2m3 6h4v2h-4v-2Z"/></svg>', openFilters);
-          filterIcon.addClass('shikimori-filter-head');
-        }
-      },
-      onPause: function () { if (filterIcon) { filterIcon.remove(); filterIcon = null; } },
-      onDestroy: function () { if (filterIcon) filterIcon.remove(); }
-    });
-    return comp;
+        card.on('hover:enter click', function () {
+          Lampa.Activity.push({ title: data.title, component: 'shikimori_detail', anime_id: String(data.id), card: data });
+        });
+        body.append(card);
+      });
+    }
+
+    this.loadData = function () {
+      if (loading || !hasMore || destroyed) return;
+      loading = true;
+      var token = requestToken;
+      if (this.activity && this.activity.loader) this.activity.loader(true);
+
+      loadPage(currentPage).then(function (data) {
+        if (destroyed || token !== requestToken) return;
+        loading = false;
+        if (comp.activity && comp.activity.loader) comp.activity.loader(false);
+        hasMore = data.results.length === PAGE_SIZE;
+
+        if (!data.results.length && currentPage === 1) showMessage('За вибраними фільтрами нічого не знайдено.', 'shikimori-state--empty');
+        else appendCards(data.results);
+
+        if (comp.activity && comp.activity.toggle) comp.activity.toggle();
+        if (controllerIsContent()) focusCollection();
+      }).catch(function (error) {
+        if (destroyed || token !== requestToken) return;
+        loading = false;
+        hasMore = false;
+        if (comp.activity && comp.activity.loader) comp.activity.loader(false);
+        if (currentPage === 1) showMessage('Не вдалося завантажити каталог: ' + (error.message || 'помилка мережі'), 'shikimori-state--error');
+        notifyError(error);
+        if (comp.activity && comp.activity.toggle) comp.activity.toggle();
+      });
+    };
+
+    this.reload = function () {
+      requestToken += 1;
+      loading = false;
+      currentPage = 1;
+      hasMore = true;
+      lastFocused = filterButton[0];
+      body.empty();
+      updateFilterText();
+      this.loadData();
+      if (controllerIsContent()) focusCollection();
+    };
+
+    this.create = function () {
+      activeCatalog = this;
+      updateFilterText();
+      filterButton.on('hover:focus', function () { lastFocused = filterButton[0]; scroll.update(filterButton, true); });
+      filterButton.on('hover:enter click', openFilters);
+      scroll.append(filterButton);
+      scroll.append(body);
+      scroll.onEnd = function () {
+        if (!loading && hasMore) { currentPage += 1; comp.loadData(); }
+      };
+      this.loadData();
+      return this.render();
+    };
+
+    this.start = function () {
+      activeCatalog = this;
+      Lampa.Controller.add('content', {
+        link: this,
+        invisible: true,
+        toggle: focusCollection,
+        left: function () { var nav = navigator(); if (nav && nav.canmove('left')) nav.move('left'); else Lampa.Controller.toggle('menu'); },
+        right: function () { var nav = navigator(); if (nav && nav.canmove('right')) nav.move('right'); },
+        up: function () { var nav = navigator(); if (nav && nav.canmove('up')) nav.move('up'); else Lampa.Controller.toggle('head'); },
+        down: function () { var nav = navigator(); if (nav && nav.canmove('down')) nav.move('down'); },
+        back: function () { Lampa.Activity.backward(); }
+      });
+      Lampa.Controller.toggle('content');
+    };
+
+    this.pause = function () {};
+    this.stop = function () {};
+    this.render = function () { return scroll.render(); };
+    this.destroy = function () {
+      destroyed = true;
+      requestToken += 1;
+      if (activeCatalog === this) activeCatalog = null;
+      scroll.destroy();
+      filterButton.remove();
+      body.remove();
+    };
   }
 
   function safe(text) {
@@ -245,6 +366,10 @@
     var html = $('<div class="shikimori-detail"></div>');
     var body = $('<div class="shikimori-detail__body"></div>');
     var openButton;
+    function move(direction) {
+      var nav = window.Navigator || Lampa.Navigator;
+      if (nav) nav.move(direction);
+    }
     this.create = function () {
       var self = this;
       this.activity.loader(true);
@@ -267,7 +392,7 @@
       return this.render();
     };
     this.start = function () {
-      Lampa.Controller.add('content', { link: this, invisible: true, toggle: function(){ Lampa.Controller.collectionSet(scroll.render()); if(openButton) Lampa.Controller.collectionFocus(openButton, scroll.render()); }, up:function(){Navigator.move('up');}, down:function(){Navigator.move('down');}, left:function(){Lampa.Controller.toggle('menu');}, right:function(){}, back:function(){Lampa.Activity.backward();} });
+      Lampa.Controller.add('content', { link: this, invisible: true, toggle: function(){ Lampa.Controller.collectionSet(scroll.render()); if(openButton) Lampa.Controller.collectionFocus(openButton, scroll.render()); }, up:function(){move('up');}, down:function(){move('down');}, left:function(){Lampa.Controller.toggle('menu');}, right:function(){}, back:function(){Lampa.Activity.backward();} });
       Lampa.Controller.toggle('content');
     };
     this.pause = function(){};
@@ -278,12 +403,46 @@
 
   function addStyles() {
     if ($('#shikimori-plugin-style').length) return;
-    $('body').append('<style id="shikimori-plugin-style">.shikimori-detail{padding:2.2em 3em}.shikimori-detail__hero{display:flex;gap:2.2em;max-width:1200px}.shikimori-detail__poster{width:16em;max-height:25em;object-fit:cover;border-radius:.6em}.shikimori-detail__info{max-width:48em}.shikimori-detail__title{font-size:2.2em;font-weight:700;line-height:1.15}.shikimori-detail__original{opacity:.55;margin:.45em 0 1em}.shikimori-detail__meta{font-size:1.15em;margin-bottom:1.1em}.shikimori-detail__line{margin:.5em 0}.shikimori-detail__description{line-height:1.45;margin:1.4em 0;white-space:pre-line}.shikimori-detail__button{display:inline-block;padding:.8em 1.2em;border-radius:.4em;background:rgba(255,255,255,.12)}.shikimori-detail__button.focus{background:#fff;color:#111}.shikimori-detail__notice,.shikimori-detail__error{opacity:.6;margin-top:1.2em}@media(max-width:700px){.shikimori-detail{padding:1em}.shikimori-detail__hero{display:block}.shikimori-detail__poster{width:10em;margin-bottom:1em}.shikimori-detail__title{font-size:1.6em}}</style>');
+    $('body').append('<style id="shikimori-plugin-style">.shikimori-filter{margin:0 0 1.5em}.shikimori-grid{min-height:12em}.shikimori-state{padding:3em 1em;text-align:center;font-size:1.15em;opacity:.75}.shikimori-state--error{color:#ffb3b3}.shikimori-detail{padding:2.2em 3em}.shikimori-detail__hero{display:flex;gap:2.2em;max-width:1200px}.shikimori-detail__poster{width:16em;max-height:25em;object-fit:cover;border-radius:.6em}.shikimori-detail__info{max-width:48em}.shikimori-detail__title{font-size:2.2em;font-weight:700;line-height:1.15}.shikimori-detail__original{opacity:.55;margin:.45em 0 1em}.shikimori-detail__meta{font-size:1.15em;margin-bottom:1.1em}.shikimori-detail__line{margin:.5em 0}.shikimori-detail__description{line-height:1.45;margin:1.4em 0;white-space:pre-line}.shikimori-detail__button{display:inline-block;padding:.8em 1.2em;border-radius:.4em;background:rgba(255,255,255,.12)}.shikimori-detail__button.focus{background:#fff;color:#111}.shikimori-detail__notice,.shikimori-detail__error{opacity:.6;margin-top:1.2em}@media(max-width:700px){.shikimori-detail{padding:1em}.shikimori-detail__hero{display:block}.shikimori-detail__poster{width:10em;margin-bottom:1em}.shikimori-detail__title{font-size:1.6em}}</style>');
+  }
+
+  function addMenuButtonWhenReady(icon) {
+    var plugin = window[PLUGIN_ID];
+
+    function openCatalog() {
+      Lampa.Activity.push({ url: 'shikimori', title: 'Shikimori · поточний сезон', component: 'shikimori_catalog', page: 1 });
+    }
+
+    function addButton() {
+      if (plugin.menuAdded) return true;
+
+      try {
+        var button = Lampa.Menu.addButton(icon, 'Shikimori', openCatalog);
+        if (!button || !button.length) return false;
+
+        button.attr('data-action', 'shikimori');
+        button.addClass('menu__item--shikimori');
+        plugin.menuAdded = true;
+        return true;
+      } catch (error) {
+        console.warn('[Shikimori] menu is not ready yet:', error.message);
+        return false;
+      }
+    }
+
+    if (window.appready && addButton()) return;
+
+    Lampa.Listener.follow('menu', function (event) {
+      if (event && (event.type === 'start' || event.type === 'end')) addButton();
+    });
+
+    Lampa.Listener.follow('app', function (event) {
+      if (event && event.type === 'ready') addButton();
+    });
   }
 
   function init() {
-    if (window[PLUGIN_ID].ready) return;
-    window[PLUGIN_ID].ready = true;
+    if (window[PLUGIN_ID].initialized) return;
     if (!Lampa.Manifest || Number(Lampa.Manifest.app_digital || 0) < 300) {
       notifyError(new Error('Потрібна Lampa 3.0 або новіша.'));
       return;
@@ -292,7 +451,8 @@
     Lampa.Component.add('shikimori_catalog', Catalog);
     Lampa.Component.add('shikimori_detail', Detail);
     var icon = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2m-4.8 8.5h2.4v-2h1.8v2h2.4v1.8h-2.4v2H9.6v-2H7.2m9.1 4.2c-1.2 0-2.2-1-2.2-2.2h1.5c0 .4.3.7.7.7s.7-.3.7-.7h1.5c0 1.2-1 2.2-2.2 2.2Z"/></svg>';
-    Lampa.Menu.addButton(icon, 'Shikimori', function () { Lampa.Activity.push({ url: 'shikimori', title: 'Shikimori · поточний сезон', component: 'shikimori_catalog', page: 1 }); });
+    addMenuButtonWhenReady(icon);
+    window[PLUGIN_ID].initialized = true;
     console.log('[Shikimori] plugin ' + VERSION + ' ready');
   }
 
