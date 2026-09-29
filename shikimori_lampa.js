@@ -292,7 +292,7 @@
     Lampa.Component.add('shikimori_catalog', Catalog);
     Lampa.Component.add('shikimori_detail', Detail);
     var icon = '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2m-4.8 8.5h2.4v-2h1.8v2h2.4v1.8h-2.4v2H9.6v-2H7.2m9.1 4.2c-1.2 0-2.2-1-2.2-2.2h1.5c0 .4.3.7.7.7s.7-.3.7-.7h1.5c0 1.2-1 2.2-2.2 2.2Z"/></svg>';
-    Lampa.Menu.addButton(icon, 'Аніме', function () { Lampa.Activity.push({ url: 'shikimori', title: 'Аніме · поточний сезон', component: 'shikimori_catalog', page: 1 }); });
+    Lampa.Menu.addButton(icon, 'Shikimori', function () { Lampa.Activity.push({ url: 'shikimori', title: 'Shikimori · поточний сезон', component: 'shikimori_catalog', page: 1 }); });
     console.log('[Shikimori] plugin ' + VERSION + ' ready');
   }
 
