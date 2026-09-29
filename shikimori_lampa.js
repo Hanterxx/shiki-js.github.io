@@ -2,7 +2,7 @@
   'use strict';
 
   var PLUGIN_ID = 'lampa_shikimori_catalog';
-  var VERSION = '1.2.0';
+  var VERSION = '1.3.0';
   var API_ORIGIN = 'https://shikimori.io';
   var FALLBACK_API_ORIGIN = 'https://shikimori.one';
   var GRAPHQL_PATH = '/api/graphql';
@@ -299,6 +299,96 @@
     });
   }
 
+  function openInLampa(anime) {
+    var titles = [anime.russian, anime.name].filter(function (value, index, array) {
+      return value && array.indexOf(value) === index;
+    });
+    var expectedType = anime.kind === 'movie' ? 'movie' : 'tv';
+    var targetYear = parseInt(dateValue(anime.airedOn).slice(0, 4), 10) || 0;
+
+    function normalize(value) {
+      return String(value || '').toLowerCase().replace(/[^a-zа-яёіїєґ0-9]+/gi, ' ').trim();
+    }
+
+    function fallbackSearch() {
+      if (Lampa.Search && Lampa.Search.open) Lampa.Search.open({ input: titles[0] || anime.name || '' });
+      else notifyError(new Error('Не вдалося знайти відповідну картку в каталозі Lampa'));
+    }
+
+    function openFull(candidate) {
+      Lampa.Activity.push({
+        url: candidate.url || '',
+        title: candidate.title || candidate.name || titles[0],
+        component: 'full',
+        id: candidate.id,
+        method: candidate._media_type || (candidate.name || candidate.first_air_date ? 'tv' : 'movie'),
+        card: candidate,
+        source: candidate.source || 'tmdb'
+      });
+    }
+
+    function scoreCandidates(candidates) {
+      var normalizedTitles = titles.map(normalize);
+      return candidates.map(function (candidate) {
+        var score = candidate._media_type === expectedType ? 35 : 0;
+        var candidateYear = parseInt(String(candidate.release_date || candidate.first_air_date || '').slice(0, 4), 10) || 0;
+        var candidateTitles = [candidate.title, candidate.name, candidate.original_title, candidate.original_name].map(normalize).filter(Boolean);
+        var exactTitle = candidateTitles.some(function (title) { return normalizedTitles.indexOf(title) >= 0; });
+        var partialTitle = !exactTitle && candidateTitles.some(function (title) {
+          return normalizedTitles.some(function (expected) { return expected && (title.indexOf(expected) >= 0 || expected.indexOf(title) >= 0); });
+        });
+        if (exactTitle) score += 55;
+        else if (partialTitle) score += 25;
+        if (targetYear && candidateYear) score += candidateYear === targetYear ? 30 : Math.abs(candidateYear - targetYear) === 1 ? 12 : 0;
+        return { item: candidate, score: score, year: candidateYear || '—' };
+      }).sort(function (a, b) { return b.score - a.score; });
+    }
+
+    function choose(candidates) {
+      if (Lampa.Loading && Lampa.Loading.stop) Lampa.Loading.stop();
+      if (!candidates.length) return fallbackSearch();
+      var scored = scoreCandidates(candidates);
+      if (scored[0].score >= 75) return openFull(scored[0].item);
+
+      var items = scored.slice(0, 7).map(function (entry) {
+        return {
+          title: (entry.item.title || entry.item.name || 'Без назви') + ' (' + entry.year + ')',
+          subtitle: entry.item._media_type === 'movie' ? 'Фільм у Lampa' : 'Серіал у Lampa',
+          candidate: entry.item
+        };
+      });
+      items.push({ title: 'Пошук вручну', subtitle: titles[0] || anime.name, manual: true });
+      Lampa.Select.show({
+        title: 'Оберіть картку Lampa',
+        items: items,
+        onSelect: function (selected) {
+          if (selected.manual) fallbackSearch();
+          else openFull(selected.candidate);
+        },
+        onBack: function () { Lampa.Controller.toggle('content'); }
+      });
+    }
+
+    function collect(result) {
+      var candidates = [];
+      if (result && result.movie && Array.isArray(result.movie.results)) result.movie.results.forEach(function (item) { item._media_type = 'movie'; candidates.push(item); });
+      if (result && result.tv && Array.isArray(result.tv.results)) result.tv.results.forEach(function (item) { item._media_type = 'tv'; candidates.push(item); });
+      return candidates;
+    }
+
+    function searchAt(index, accumulated) {
+      if (index >= titles.length || !Lampa.Api || !Lampa.Api.search) return choose(accumulated);
+      Lampa.Api.search({ query: encodeURIComponent(titles[index]) }, function (result) {
+        var found = collect(result);
+        if (found.length || index + 1 >= titles.length) choose(accumulated.concat(found));
+        else searchAt(index + 1, accumulated);
+      });
+    }
+
+    if (Lampa.Loading && Lampa.Loading.start) Lampa.Loading.start(function () { if (Lampa.Loading.stop) Lampa.Loading.stop(); });
+    searchAt(0, []);
+  }
+
   function Catalog(object) {
     var comp = this;
     var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250, end_ratio: 2 });
@@ -332,7 +422,7 @@
     }
 
     function focusCollection() {
-      var collection = scroll.render();
+      var collection = scroll.render(true);
       Lampa.Controller.collectionSet(collection);
       var target = isAttached(lastFocused) ? lastFocused : filterButton[0];
       Lampa.Controller.collectionFocus(target, collection);
@@ -360,12 +450,13 @@
 
         card.on('hover:focus', function () {
           lastFocused = card[0];
-          scroll.update(card, true);
+          scroll.update(card);
           if (data.poster && Lampa.Background) Lampa.Background.change(data.poster);
         });
         card.on('hover:enter click', function () {
-          Lampa.Activity.push({ title: data.title, component: 'shikimori_detail', anime_id: String(data.id), card: data });
+          openInLampa(anime);
         });
+        card.on('hover:long', function () { Lampa.Activity.push({ title: data.title, component: 'shikimori_detail', anime_id: String(data.id), card: data }); });
         body.append(card);
       });
     }
@@ -412,11 +503,18 @@
 
     this.create = function () {
       activeCatalog = this;
+      scroll.minus();
       updateFilterText();
-      filterButton.on('hover:focus', function () { lastFocused = filterButton[0]; scroll.update(filterButton, true); });
+      filterButton.on('hover:focus', function () { lastFocused = filterButton[0]; scroll.update(filterButton); });
       filterButton.on('hover:enter click', openFilters);
       scroll.append(filterButton);
       scroll.append(body);
+      scroll.onScroll = function () { if (Lampa.Layer && Lampa.Layer.visible) Lampa.Layer.visible(scroll.render(true)); };
+      scroll.onWheel = function (step) {
+        if (!Lampa.Controller.own(comp)) comp.start();
+        var nav = navigator();
+        if (nav) nav.move(step > 0 ? 'down' : 'up');
+      };
       scroll.onEnd = function () {
         if (!loading && hasMore) { currentPage += 1; comp.loadData(); }
       };
@@ -429,7 +527,7 @@
       Lampa.Controller.add('content', {
         link: this,
         invisible: true,
-        toggle: focusCollection,
+        toggle: function () { if (scroll.restorePosition) scroll.restorePosition(); focusCollection(); },
         left: function () { var nav = navigator(); if (nav && nav.canmove('left')) nav.move('left'); else Lampa.Controller.toggle('menu'); },
         right: function () { var nav = navigator(); if (nav && nav.canmove('right')) nav.move('right'); },
         up: function () { var nav = navigator(); if (nav && nav.canmove('up')) nav.move('up'); else Lampa.Controller.toggle('head'); },
