@@ -2,7 +2,7 @@
   'use strict';
 
   var PLUGIN_ID = 'lampa_shikimori_catalog';
-  var VERSION = '1.3.0';
+  var VERSION = '1.4.0';
   var API_ORIGIN = 'https://shikimori.io';
   var FALLBACK_API_ORIGIN = 'https://shikimori.one';
   var GRAPHQL_PATH = '/api/graphql';
@@ -111,10 +111,14 @@
   function requestRest(path) {
     var origins = proxyOrigin() ? [''] : [API_ORIGIN, FALLBACK_API_ORIGIN];
     function attempt(index) {
-      return lampaGet(endpoint(path, origins[index])).catch(function (error) {
-        if (index + 1 < origins.length) return attempt(index + 1);
-        throw error;
-      });
+      var url = endpoint(path, origins[index]);
+      return fetch(url, { headers: { 'Accept': 'application/json' }, mode: 'cors', credentials: 'omit' })
+        .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
+        .catch(function () { return lampaGet(url); })
+        .catch(function (error) {
+          if (index + 1 < origins.length) return attempt(index + 1);
+          throw error;
+        });
     }
     return attempt(0);
   }
@@ -151,6 +155,10 @@
 
   function titleFor(anime) { return anime.russian || anime.name || 'Без назви'; }
   function dateValue(value) { return value && (value.date || value) || ''; }
+  function displayDate(value) {
+    var match = String(dateValue(value)).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return match ? match[3] + '.' + match[2] + '.' + match[1] : '';
+  }
 
   function asCard(anime) {
     var year = dateValue(anime.airedOn).slice(0, 4);
@@ -261,6 +269,12 @@
   function yearItems() {
     var year = new Date().getFullYear();
     var seasons = [{ title: 'Усі сезони', value: '' }];
+    var upcomingYear = year + 1;
+    seasons.push({ title: 'Наступний рік', separator: true });
+    seasons.push({ title: 'Увесь ' + upcomingYear + ' рік', value: String(upcomingYear) });
+    ['winter', 'spring', 'summer', 'fall'].forEach(function (s) {
+      seasons.push({ title: labels.season[s] + ' ' + upcomingYear, value: s + '_' + upcomingYear });
+    });
     seasons.push({ title: 'Останні п’ять років', separator: true });
     for (var y = year; y >= year - 4; y--) {
       seasons.push({ title: 'Увесь ' + y + ' рік', value: String(y) });
@@ -434,30 +448,34 @@
 
     function appendCards(cards) {
       cards.forEach(function (data) {
-        var anime = data.shikimori;
-        var card = Lampa.Template.get('card', data);
-        card.addClass('selector');
-        card.attr('data-shikimori-id', data.id);
+        try {
+          var anime = data.shikimori;
+          var card = Lampa.Template.get('card', data);
+          card.addClass('selector');
+          card.attr('data-shikimori-id', data.id);
 
-        var image = card.find('img');
-        if (data.poster) image.attr('src', data.poster).removeClass('lazy');
-        image.on('error', function () { this.onerror = null; this.src = './img/img_broken.svg'; });
+          var image = card.find('img');
+          if (data.poster) image.attr('src', data.poster).removeClass('lazy');
+          image.on('error', function () { this.onerror = null; this.src = './img/img_broken.svg'; });
 
-        card.find('.card__title').text(data.title);
-        if (data.release_year) card.find('.card__age').text(data.release_year);
-        if (anime && anime.kind) card.find('.card__view').append('<div class="card__type">' + safe(labels.kind[anime.kind] || anime.kind) + '</div>');
-        if (anime && Number(anime.score) > 0) card.find('.card__view').append('<div class="card__vote">' + Number(anime.score).toFixed(1) + '</div>');
+          card.find('.card__title').text(data.title);
+          if (data.release_year) card.find('.card__age').text(data.release_year);
+          if (anime && anime.kind) card.find('.card__view').append('<div class="card__type">' + safe(labels.kind[anime.kind] || anime.kind) + '</div>');
+          if (anime && Number(anime.score) > 0) card.find('.card__view').append('<div class="card__vote">' + Number(anime.score).toFixed(1) + '</div>');
+          var premiere = anime && anime.status === 'anons' ? displayDate(anime.airedOn) : '';
+          if (premiere) card.find('.card__view').append('<div class="shikimori-airdate">' + premiere + '</div>');
 
-        card.on('hover:focus', function () {
-          lastFocused = card[0];
-          scroll.update(card);
-          if (data.poster && Lampa.Background) Lampa.Background.change(data.poster);
-        });
-        card.on('hover:enter click', function () {
-          openInLampa(anime);
-        });
-        card.on('hover:long', function () { Lampa.Activity.push({ title: data.title, component: 'shikimori_detail', anime_id: String(data.id), card: data }); });
-        body.append(card);
+          card.on('hover:focus', function () {
+            lastFocused = card[0];
+            scroll.update(card);
+            if (data.poster && Lampa.Background) Lampa.Background.change(data.poster);
+          });
+          card.on('hover:enter click', function () { openInLampa(anime); });
+          card.on('hover:long', function () { Lampa.Activity.push({ title: data.title, component: 'shikimori_detail', anime_id: String(data.id), card: data }); });
+          body.append(card);
+        } catch (error) {
+          console.warn('[Shikimori] card skipped:', data && data.id, error.message);
+        }
       });
     }
 
@@ -605,7 +623,7 @@
 
   function addStyles() {
     if ($('#shikimori-plugin-style').length) return;
-    $('body').append('<style id="shikimori-plugin-style">.shikimori-filter{margin:0 0 1.5em}.shikimori-grid{min-height:12em}.shikimori-state{padding:3em 1em;text-align:center;font-size:1.15em;opacity:.75}.shikimori-state--error{color:#ffb3b3}.shikimori-detail{padding:2.2em 3em}.shikimori-detail__hero{display:flex;gap:2.2em;max-width:1200px}.shikimori-detail__poster{width:16em;max-height:25em;object-fit:cover;border-radius:.6em}.shikimori-detail__info{max-width:48em}.shikimori-detail__title{font-size:2.2em;font-weight:700;line-height:1.15}.shikimori-detail__original{opacity:.55;margin:.45em 0 1em}.shikimori-detail__meta{font-size:1.15em;margin-bottom:1.1em}.shikimori-detail__line{margin:.5em 0}.shikimori-detail__description{line-height:1.45;margin:1.4em 0;white-space:pre-line}.shikimori-detail__button{display:inline-block;padding:.8em 1.2em;border-radius:.4em;background:rgba(255,255,255,.12)}.shikimori-detail__button.focus{background:#fff;color:#111}.shikimori-detail__notice,.shikimori-detail__error{opacity:.6;margin-top:1.2em}@media(max-width:700px){.shikimori-detail{padding:1em}.shikimori-detail__hero{display:block}.shikimori-detail__poster{width:10em;margin-bottom:1em}.shikimori-detail__title{font-size:1.6em}}</style>');
+    $('body').append('<style id="shikimori-plugin-style">.shikimori-filter{margin:0 0 1.5em}.shikimori-grid{min-height:12em}.shikimori-state{padding:3em 1em;text-align:center;font-size:1.15em;opacity:.75}.shikimori-state--error{color:#ffb3b3}.shikimori-airdate{position:absolute;left:.3em;bottom:.3em;padding:.25em .55em;border-radius:1em;background:rgba(0,0,0,.72);color:#fff;font-size:.9em;font-weight:600;z-index:2}.shikimori-detail{padding:2.2em 3em}.shikimori-detail__hero{display:flex;gap:2.2em;max-width:1200px}.shikimori-detail__poster{width:16em;max-height:25em;object-fit:cover;border-radius:.6em}.shikimori-detail__info{max-width:48em}.shikimori-detail__title{font-size:2.2em;font-weight:700;line-height:1.15}.shikimori-detail__original{opacity:.55;margin:.45em 0 1em}.shikimori-detail__meta{font-size:1.15em;margin-bottom:1.1em}.shikimori-detail__line{margin:.5em 0}.shikimori-detail__description{line-height:1.45;margin:1.4em 0;white-space:pre-line}.shikimori-detail__button{display:inline-block;padding:.8em 1.2em;border-radius:.4em;background:rgba(255,255,255,.12)}.shikimori-detail__button.focus{background:#fff;color:#111}.shikimori-detail__notice,.shikimori-detail__error{opacity:.6;margin-top:1.2em}@media(max-width:700px){.shikimori-detail{padding:1em}.shikimori-detail__hero{display:block}.shikimori-detail__poster{width:10em;margin-bottom:1em}.shikimori-detail__title{font-size:1.6em}}</style>');
   }
 
   function addMenuButtonWhenReady(icon) {
