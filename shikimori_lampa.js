@@ -2,8 +2,9 @@
   'use strict';
 
   var PLUGIN_ID = 'lampa_shikimori_catalog';
-  var VERSION = '1.1.0';
-  var API_ORIGIN = 'https://shikimori.one';
+  var VERSION = '1.2.0';
+  var API_ORIGIN = 'https://shikimori.io';
+  var FALLBACK_API_ORIGIN = 'https://shikimori.one';
   var GRAPHQL_PATH = '/api/graphql';
   var PAGE_SIZE = 24;
   var CACHE_TTL = 15 * 60 * 1000;
@@ -44,11 +45,15 @@
   var LIST_QUERY = 'query AnimeCatalog($page: PositiveInt!, $limit: PositiveInt!, $order: OrderEnum, $kind: AnimeKindString, $status: AnimeStatusString, $season: SeasonString, $genre: String) { animes(page: $page, limit: $limit, order: $order, kind: $kind, status: $status, season: $season, genre: $genre, censored: true) { id name russian kind status score episodes episodesAired duration airedOn { date } releasedOn { date } season url poster { main2xUrl originalUrl } genres { id name russian } } }';
   var DETAIL_QUERY = 'query AnimeDetail($ids: String) { animes(ids: $ids, limit: 1, censored: true) { id name russian english japanese kind status score episodes episodesAired duration airedOn { date } releasedOn { date } season rating url description poster { originalUrl main2xUrl } genres { id name russian } studios { id name } } }';
 
-  function endpoint(path) {
+  function proxyOrigin() {
     var proxy = '';
     try { proxy = localStorage.getItem(CACHE_PREFIX + 'proxy') || ''; } catch (e) {}
-    if (!proxy) return API_ORIGIN + path;
-    return proxy.replace(/\/$/, '') + path;
+    return proxy.replace(/\/$/, '');
+  }
+
+  function endpoint(path, origin) {
+    var proxy = proxyOrigin();
+    return proxy ? proxy + path : (origin || API_ORIGIN) + path;
   }
 
   function cacheGet(key) {
@@ -68,31 +73,65 @@
     var cached = cacheGet(cacheKey);
     if (cached) return Promise.resolve(cached);
 
-    return fetch(endpoint(GRAPHQL_PATH), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ query: query, variables: variables }),
-      mode: 'cors',
-      credentials: 'omit'
-    }).then(function (response) {
-      if (response.status === 429) throw new Error('Ліміт Shikimori вичерпано. Спробуйте пізніше.');
-      if (!response.ok) throw new Error('Shikimori повернув HTTP ' + response.status);
-      return response.json();
-    }).then(function (json) {
-      if (json.errors && json.errors.length) throw new Error(json.errors[0].message || 'Помилка GraphQL');
-      cacheSet(cacheKey, json.data);
-      return json.data;
+    var origins = proxyOrigin() ? [''] : [API_ORIGIN, FALLBACK_API_ORIGIN];
+
+    function attempt(index) {
+      return fetch(endpoint(GRAPHQL_PATH, origins[index]), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({ query: query, variables: variables }),
+        mode: 'cors',
+        credentials: 'omit'
+      }).then(function (response) {
+        if (response.status === 429) throw new Error('Ліміт Shikimori вичерпано. Спробуйте пізніше.');
+        if (!response.ok) throw new Error('Shikimori повернув HTTP ' + response.status);
+        return response.json();
+      }).then(function (json) {
+        if (json.errors && json.errors.length) throw new Error(json.errors[0].message || 'Помилка GraphQL');
+        cacheSet(cacheKey, json.data);
+        return json.data;
+      }).catch(function (error) {
+        if (index + 1 < origins.length && String(error.message || '').indexOf('Ліміт') < 0) return attempt(index + 1);
+        throw error;
+      });
+    }
+
+    return attempt(0);
+  }
+
+  function lampaGet(url) {
+    return new Promise(function (resolve, reject) {
+      if (!Lampa.Reguest) return reject(new Error('Lampa.Reguest недоступний'));
+      var network = new Lampa.Reguest();
+      if (network.timeout) network.timeout(15000);
+      network.silent(url, resolve, function (error) { reject(error instanceof Error ? error : new Error('Помилка мережі Lampa')); });
     });
+  }
+
+  function requestRest(path) {
+    var origins = proxyOrigin() ? [''] : [API_ORIGIN, FALLBACK_API_ORIGIN];
+    function attempt(index) {
+      return lampaGet(endpoint(path, origins[index])).catch(function (error) {
+        if (index + 1 < origins.length) return attempt(index + 1);
+        throw error;
+      });
+    }
+    return attempt(0);
   }
 
   function requestGenres() {
     var cached = cacheGet('genres');
     if (cached) return Promise.resolve(cached);
-    return fetch(endpoint('/api/genres'), { headers: { 'Accept': 'application/json' }, mode: 'cors', credentials: 'omit' })
-      .then(function (response) {
-        if (!response.ok) throw new Error('Не вдалося завантажити жанри');
-        return response.json();
-      }).then(function (items) {
+    var origins = proxyOrigin() ? [''] : [API_ORIGIN, FALLBACK_API_ORIGIN];
+    function attempt(index) {
+      return fetch(endpoint('/api/genres', origins[index]), { headers: { 'Accept': 'application/json' }, mode: 'cors', credentials: 'omit' })
+        .then(function (response) { if (!response.ok) throw new Error('HTTP ' + response.status); return response.json(); })
+        .catch(function (error) {
+          if (index + 1 < origins.length) return attempt(index + 1);
+          return requestRest('/api/genres');
+        });
+    }
+    return attempt(0).then(function (items) {
         var result = items.filter(function (item) {
           return String(item.entry_type || '').toLowerCase() === 'anime' || String(item.kind || '').toLowerCase() === 'anime';
         });
@@ -132,9 +171,67 @@
     };
   }
 
+  function absoluteAsset(url) {
+    if (!url) return '';
+    return /^https?:\/\//i.test(url) ? url : API_ORIGIN + (url.charAt(0) === '/' ? url : '/' + url);
+  }
+
+  function normalizeRestAnime(anime) {
+    var image = anime.image || {};
+    return {
+      id: anime.id,
+      name: anime.name,
+      russian: anime.russian,
+      english: anime.english,
+      japanese: anime.japanese,
+      kind: anime.kind,
+      status: anime.status,
+      score: Number(anime.score || 0),
+      episodes: anime.episodes || 0,
+      episodesAired: anime.episodes_aired || 0,
+      duration: anime.duration,
+      airedOn: { date: anime.aired_on || '' },
+      releasedOn: { date: anime.released_on || '' },
+      season: anime.season,
+      rating: anime.rating,
+      url: absoluteAsset(anime.url),
+      description: anime.description || '',
+      poster: { main2xUrl: absoluteAsset(image.original || image.preview), originalUrl: absoluteAsset(image.original || image.preview) },
+      genres: anime.genres || [],
+      studios: anime.studios || []
+    };
+  }
+
+  function restQuery(page) {
+    var params = ['page=' + page, 'limit=' + PAGE_SIZE, 'order=' + encodeURIComponent(state.order), 'censored=true'];
+    if (state.kind) params.push('kind=' + encodeURIComponent(state.kind));
+    if (state.status) params.push('status=' + encodeURIComponent(state.status));
+    if (state.season) params.push('season=' + encodeURIComponent(state.season));
+    if (state.genre) params.push('genre=' + encodeURIComponent(state.genre));
+    return '/api/animes?' + params.join('&');
+  }
+
+  function requestRestPage(page) {
+    return requestRest(restQuery(page)).then(function (items) {
+      return (Array.isArray(items) ? items : []).map(normalizeRestAnime);
+    });
+  }
+
+  function loadDetail(id) {
+    return requestGraphQL(DETAIL_QUERY, { ids: String(id) }).then(function (data) {
+      return data.animes && data.animes[0];
+    }).catch(function () {
+      return requestRest('/api/animes/' + encodeURIComponent(id)).then(normalizeRestAnime);
+    });
+  }
+
   function loadPage(page) {
     return requestGraphQL(LIST_QUERY, cleanVariables(page)).then(function (data) {
-      var items = (data.animes || []).map(asCard);
+      return data.animes || [];
+    }).catch(function () {
+      return requestRestPage(page);
+    }).then(function (animes) {
+      var items = animes.map(asCard);
       return { results: items, page: page, total_pages: items.length === PAGE_SIZE ? page + 1 : page };
     });
   }
@@ -149,7 +246,9 @@
   function select(title, items, selected, callback) {
     Lampa.Select.show({
       title: title,
-      items: items.map(function (item) { return { title: item.title, value: item.value, selected: item.value === selected }; }),
+      items: items.map(function (item) {
+        return { title: item.title, value: item.value, selected: item.value === selected, separator: Boolean(item.separator) };
+      }),
       onSelect: function (item) { Lampa.Controller.toggle('content'); callback(item.value, item.title); },
       onBack: function () { Lampa.Controller.toggle('content'); }
     });
@@ -162,10 +261,16 @@
   function yearItems() {
     var year = new Date().getFullYear();
     var seasons = [{ title: 'Усі сезони', value: '' }];
-    for (var y = year + 1; y >= year - 12; y--) {
+    seasons.push({ title: 'Останні п’ять років', separator: true });
+    for (var y = year; y >= year - 4; y--) {
+      seasons.push({ title: 'Увесь ' + y + ' рік', value: String(y) });
       ['winter', 'spring', 'summer', 'fall'].forEach(function (s) {
         seasons.push({ title: labels.season[s] + ' ' + y, value: s + '_' + y });
       });
+    }
+    seasons.push({ title: 'За десятиліттями', separator: true });
+    for (var decade = Math.floor(year / 10) * 10; decade >= 1910; decade -= 10) {
+      seasons.push({ title: decade + '-ті', value: String(decade).slice(0, 3) + 'x' });
     }
     return seasons;
   }
@@ -374,8 +479,7 @@
       var self = this;
       this.activity.loader(true);
       scroll.append(body); html.append(scroll.render());
-      requestGraphQL(DETAIL_QUERY, { ids: String(object.anime_id) }).then(function (data) {
-        var anime = data.animes && data.animes[0];
+      loadDetail(object.anime_id).then(function (anime) {
         if (!anime) throw new Error('Аніме не знайдено');
         var poster = anime.poster && (anime.poster.originalUrl || anime.poster.main2xUrl) || '';
         var genres = (anime.genres || []).map(function(g){ return g.russian || g.name; }).join(', ');
