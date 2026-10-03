@@ -2,11 +2,13 @@
   'use strict';
 
   var PLUGIN_ID = 'lampa_shikimori_catalog';
-  var VERSION = '1.5.1';
+  var VERSION = '1.6.0';
   var API_ORIGIN = 'https://shikimori.io';
   var FALLBACK_API_ORIGIN = 'https://shikimori.one';
   var GRAPHQL_PATH = '/api/graphql';
   var PAGE_SIZE = 24;
+  var PRELOAD_TARGET = 120;
+  var RENDER_BATCH = 48;
   var CACHE_TTL = 15 * 60 * 1000;
   var CACHE_PREFIX = 'lampa_shikimori_v1:';
 
@@ -517,10 +519,15 @@
     var comp = this;
     var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250, end_ratio: 2 });
     var filterButton = $('<div class="settings-folder selector shikimori-filter"><div class="settings-folder__icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 5h16v2H4V5m3 6h10v2H7v-2m3 6h4v2h-4v-2Z"/></svg></div><div class="settings-folder__name">Фильтры и сортировка</div><div class="settings-folder__value"></div></div>');
-    var body = $('<div class="category-full shikimori-grid"></div>');
-    var currentPage = 1;
-    var loading = false;
-    var hasMore = true;
+    var body = $('<div class="mapping--grid cols--6 shikimori-grid"></div>');
+    var nextPage = 1;
+    var initialLoading = false;
+    var exhausted = false;
+    var buffer = [];
+    var preloadingToken = null;
+    var waitingForBuffer = false;
+    var warmedPosters = {};
+    var posterWarmers = [];
     var destroyed = false;
     var requestToken = 0;
     var lastFocused = filterButton[0];
@@ -554,10 +561,29 @@
     }
 
     function showMessage(text, className) {
-      body.html('<div class="shikimori-state ' + (className || '') + '">' + safe(text) + '</div>');
+      body.html('<div class="shikimori-state ' + (className || '') + '" style="width:100%">' + safe(text) + '</div>');
+    }
+
+    function warmPoster(url) {
+      if (!url || warmedPosters[url] || typeof Image === 'undefined') return;
+      warmedPosters[url] = true;
+
+      var image = new Image();
+      var release = function () {
+        var index = posterWarmers.indexOf(image);
+        if (index >= 0) posterWarmers.splice(index, 1);
+        image.onload = null;
+        image.onerror = null;
+      };
+
+      image.onload = release;
+      image.onerror = release;
+      posterWarmers.push(image);
+      image.src = url;
     }
 
     function appendCards(cards) {
+      var fragment = document.createDocumentFragment();
       cards.forEach(function (data) {
         try {
           var anime = data.shikimori;
@@ -583,36 +609,95 @@
           });
           card.on('hover:enter click', function () { openInLampa(anime); });
           card.on('hover:long', function () { Lampa.Activity.push({ title: data.title, component: 'shikimori_detail', anime_id: String(data.id), card: data }); });
-          body.append(card);
+          fragment.appendChild(card[0]);
         } catch (error) {
           console.warn('[Shikimori] card skipped:', data && data.id, error.message);
         }
       });
+      body[0].appendChild(fragment);
+    }
+
+    function fetchNextPage(token) {
+      if (destroyed || token !== requestToken || exhausted) return Promise.resolve([]);
+
+      var page = nextPage;
+      nextPage += 1;
+
+      return loadPage(page).then(function (data) {
+        if (destroyed || token !== requestToken) return [];
+        if (data.results.length < PAGE_SIZE) exhausted = true;
+        return data.results;
+      }).catch(function (error) {
+        if (!destroyed && token === requestToken && nextPage === page + 1) nextPage = page;
+        throw error;
+      });
+    }
+
+    function appendBuffered() {
+      if (!buffer.length) return false;
+      appendCards(buffer.splice(0, RENDER_BATCH));
+      if (Lampa.Layer && Lampa.Layer.visible) Lampa.Layer.visible(scroll.render(true));
+      return true;
+    }
+
+    function preloadAhead(token) {
+      if (destroyed || token !== requestToken || exhausted || preloadingToken === token) return;
+      preloadingToken = token;
+
+      function fill() {
+        if (destroyed || token !== requestToken || exhausted || buffer.length >= PRELOAD_TARGET) return Promise.resolve();
+        return fetchNextPage(token).then(function (cards) {
+          if (destroyed || token !== requestToken) return;
+          cards.forEach(function (card) { warmPoster(card.poster); });
+          buffer = buffer.concat(cards);
+          if (!cards.length) return;
+          if (waitingForBuffer) {
+            waitingForBuffer = false;
+            appendBuffered();
+          }
+          return fill();
+        });
+      }
+
+      fill().then(function () {
+        if (preloadingToken === token) preloadingToken = null;
+        if (destroyed || token !== requestToken) return;
+        if (waitingForBuffer && buffer.length) {
+          waitingForBuffer = false;
+          appendBuffered();
+          preloadAhead(token);
+        }
+      }).catch(function (error) {
+        if (preloadingToken === token) preloadingToken = null;
+        if (destroyed || token !== requestToken) return;
+        waitingForBuffer = false;
+        console.warn('[Shikimori] background preload failed:', error.message || error);
+      });
     }
 
     this.loadData = function () {
-      if (loading || !hasMore || destroyed) return;
-      loading = true;
+      if (initialLoading || destroyed) return;
+      initialLoading = true;
       var token = requestToken;
       if (this.activity && this.activity.loader) this.activity.loader(true);
 
-      loadPage(currentPage).then(function (data) {
+      fetchNextPage(token).then(function (cards) {
         if (destroyed || token !== requestToken) return;
-        loading = false;
+        initialLoading = false;
         if (comp.activity && comp.activity.loader) comp.activity.loader(false);
-        hasMore = data.results.length === PAGE_SIZE;
 
-        if (!data.results.length && currentPage === 1) showMessage('По выбранным фильтрам ничего не найдено.', 'shikimori-state--empty');
-        else appendCards(data.results);
+        if (!cards.length) showMessage('По выбранным фильтрам ничего не найдено.', 'shikimori-state--empty');
+        else appendCards(cards);
 
         if (comp.activity && comp.activity.toggle) comp.activity.toggle();
         if (controllerIsContent()) focusCollection();
+        preloadAhead(token);
       }).catch(function (error) {
         if (destroyed || token !== requestToken) return;
-        loading = false;
-        hasMore = false;
+        initialLoading = false;
+        exhausted = true;
         if (comp.activity && comp.activity.loader) comp.activity.loader(false);
-        if (currentPage === 1) showMessage('Не удалось загрузить каталог: ' + (error.message || 'ошибка сети'), 'shikimori-state--error');
+        showMessage('Не удалось загрузить каталог: ' + (error.message || 'ошибка сети'), 'shikimori-state--error');
         notifyError(error);
         if (comp.activity && comp.activity.toggle) comp.activity.toggle();
       });
@@ -620,9 +705,11 @@
 
     this.reload = function () {
       requestToken += 1;
-      loading = false;
-      currentPage = 1;
-      hasMore = true;
+      initialLoading = false;
+      nextPage = 1;
+      exhausted = false;
+      buffer = [];
+      waitingForBuffer = false;
       lastFocused = filterButton[0];
       body.empty();
       updateFilterText();
@@ -645,7 +732,11 @@
         if (nav) nav.move(step > 0 ? 'down' : 'up');
       };
       scroll.onEnd = function () {
-        if (!loading && hasMore) { currentPage += 1; comp.loadData(); }
+        if (appendBuffered()) preloadAhead(requestToken);
+        else if (!exhausted) {
+          waitingForBuffer = true;
+          preloadAhead(requestToken);
+        }
       };
       this.loadData();
       return this.render();
@@ -668,10 +759,16 @@
 
     this.pause = function () {};
     this.stop = function () {};
+    this.resize = function () {
+      if (Lampa.Layer && Lampa.Layer.visible) Lampa.Layer.visible(scroll.render(true));
+      if (isAttached(lastFocused)) scroll.update($(lastFocused));
+    };
     this.render = function () { return scroll.render(); };
     this.destroy = function () {
       destroyed = true;
       requestToken += 1;
+      buffer = [];
+      posterWarmers = [];
       if (activeCatalog === this) activeCatalog = null;
       scroll.destroy();
       filterButton.remove();
