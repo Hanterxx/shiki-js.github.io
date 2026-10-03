@@ -2,7 +2,7 @@
   'use strict';
 
   var PLUGIN_ID = 'lampa_shikimori_catalog';
-  var VERSION = '1.5.0';
+  var VERSION = '1.5.1';
   var API_ORIGIN = 'https://shikimori.io';
   var FALLBACK_API_ORIGIN = 'https://shikimori.one';
   var GRAPHQL_PATH = '/api/graphql';
@@ -334,6 +334,30 @@
       });
     }
 
+    function periodPanel() {
+      var items = [{ title: 'За всё время', allTime: true, selected: draft.seasons.length === 0 }];
+      periods.forEach(function (item) {
+        if (item.separator) items.push({ title: item.title, separator: true });
+        else items.push({ title: item.title, value: item.value, checkbox: true, checked: draft.seasons.indexOf(item.value) >= 0 });
+      });
+      Lampa.Select.show({
+        title: 'Сезоны и периоды',
+        items: items,
+        onSelect: function (item) {
+          if (item.allTime) {
+            draft.seasons = [];
+            main();
+          }
+        },
+        onCheck: function (item) {
+          var index = draft.seasons.indexOf(item.value);
+          if (item.checked && index < 0) draft.seasons.push(item.value);
+          if (!item.checked && index >= 0) draft.seasons.splice(index, 1);
+        },
+        onBack: main
+      });
+    }
+
     function singlePanel(title, options, selected, onSelect) {
       Lampa.Select.show({
         title: title,
@@ -362,7 +386,7 @@
     }
 
     function main() {
-      var periodSummary = compact(titlesFor(periods, draft.seasons), 'Все периоды');
+      var periodSummary = compact(titlesFor(periods, draft.seasons), 'За всё время');
       var kindSummary = compact(titlesFor(kinds, draft.kinds), 'Все типы');
       var genreSummary = compact(draft.genres.map(function (id) { return draft.genreTitles[id] || ('#' + id); }), 'Все жанры');
       Lampa.Select.show({
@@ -377,7 +401,7 @@
           { title: 'Сбросить фильтры', reset: true }
         ],
         onSelect: function (item) {
-          if (item.action === 'periods') checkboxPanel('Сезоны и периоды', periods, draft.seasons);
+          if (item.action === 'periods') periodPanel();
           else if (item.action === 'kinds') checkboxPanel('Типы аниме', kinds, draft.kinds);
           else if (item.action === 'genres') showGenres();
           else if (item.action === 'status') singlePanel('Статус', statuses, draft.status, function (value) { draft.status = value; });
@@ -511,7 +535,7 @@
     }
 
     function updateFilterText() {
-      var periods = state.seasons.length ? 'периодов: ' + state.seasons.length : 'все периоды';
+      var periods = state.seasons.length ? 'периодов: ' + state.seasons.length : 'за всё время';
       var status = labels.status[state.status] || 'все статусы';
       var kinds = state.kinds.length ? 'типов: ' + state.kinds.length : 'все типы';
       var genres = state.genres.length ? 'жанров: ' + state.genres.length : 'все жанры';
